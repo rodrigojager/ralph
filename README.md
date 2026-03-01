@@ -61,9 +61,9 @@ O funcionamento é:
 
 ## Fluxo real do Ralph Loop
 
-
+```pseudo
 while (existem tarefas não concluídas):  
-  
+
     iniciar_processo_limpo()  
   
     ler_PRD()  
@@ -77,6 +77,7 @@ while (existem tarefas não concluídas):
         corrigir_ate_passar()  
   
     encerrar_processo()
+```
 
 Cada execução resolve **apenas uma task**.
 

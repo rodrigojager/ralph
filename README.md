@@ -4,11 +4,9 @@ CLI cross-platform (Windows/Linux/macOS) em .NET para executar Ralph Loops com b
 
 Repositório oficial: `https://github.com/rodrigojager/ralph`
 
-```md
 ## Dashboard
 
-![Dashboard do Ralph CLI](docs/images/dashboard.png)
-```
+![Dashboard do Ralph CLI](docs/images/dashboard.jpg)
 
 Inspirado por:
 - `https://github.com/agrimsingh/ralph-wiggum-cursor`
@@ -33,16 +31,12 @@ O sistema usa o próprio `PRD.md` como **orquestrador de estado**.
 
 O `PRD.md` contém uma lista de tarefas com checkboxes:
 
-```
-Markdown
-
-\## Tasks  
+## Tasks  
   
 \- \[ \] Criar interface IUsuarioRepository  
 \- \[ \] Implementar UsuarioRepository  
 \- \[ \] Criar testes unitários  
 \- \[ \] Ajustar DI
-```
 
 O funcionamento é:
 
@@ -67,25 +61,22 @@ O funcionamento é:
 
 ## Fluxo real do Ralph Loop
 
-```
-Plain text
 
 while (existem tarefas não concluídas):  
   
-    iniciar\_processo\_limpo()  
+    iniciar_processo_limpo()  
   
-    ler\_PRD()  
-    selecionar\_primeira\_task\_nao\_marcada()  
+    ler_PRD()  
+    selecionar_primeira_task_nao_marcada()  
   
-    executar\_apenas\_essa\_task()  
+    executar_apenas_essa_task()  
   
-    if (criterios\_ok):  
-        marcar\_checkbox\_no\_PRD()  
+    if (criterios_ok):  
+        marcar_checkbox_no_PRD()  
     else:  
-        corrigir\_ate\_passar()  
+        corrigir_ate_passar()  
   
-    encerrar\_processo()
-```
+    encerrar_processo()
 
 Cada execução resolve **apenas uma task**.
 
@@ -190,7 +181,7 @@ ralph --version
 ralph init
 ```
 
-3. Crie seu `PRD.md` com tarefas pendentes (`- [ ] ...`).
+3. Crie seu `PRD.md` com tarefas pendentes (`- [ ] ...`). Se quiser, voce pode utilizar a skill `ralph-loop-prd-generator` disponibilizada em `.skills\ralph-loop-prd-generator` para que seu agente favorito de LLM gere um arquivo já no padrão do Ralph Cli, a partir de user stories.
 4. Execute:
 
 ```bash
@@ -230,16 +221,6 @@ Use `ralph --help` para todas as flags atuais.
   - atualiza o binário da plataforma;
   - baixa `ralph-lang.zip` e atualiza `lang/*.json` automaticamente.
 - `ralph lang update` atualiza somente arquivos de idioma.
-
-Se precisar sobrescrever o repo de release:
-
-```bash
-# Linux/macOS
-export RALPH_REPO=owner/repo
-
-# Windows PowerShell
-$env:RALPH_REPO="owner/repo"
-```
 
 ## Build e testes (desenvolvimento)
 

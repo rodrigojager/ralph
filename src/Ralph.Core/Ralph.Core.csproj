@@ -1,0 +1,16 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Ralph.Tasks\Ralph.Tasks.csproj" />
+    <ProjectReference Include="..\Ralph.Engines\Ralph.Engines.csproj" />
+    <ProjectReference Include="..\Ralph.Persistence\Ralph.Persistence.csproj" />
+    <ProjectReference Include="..\Ralph.UI.Abstractions\Ralph.UI.Abstractions.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,132 @@
+using System.Text.Json;
+using Ralph.Persistence.Config;
+
+namespace Ralph.Persistence.Workspace;
+
+public sealed class WorkspaceInitializer
+{
+    public const string GuardrailsFileName = "guardrails.md";
+    public const string ProgressFileName = "progress.md";
+    public const string ErrorsLogFileName = "errors.log";
+    public const string ActivityLogFileName = "activity.log";
+    public const string StateFileName = "state.json";
+    public const string IterationFileName = ".iteration";
+    public const string ConfigFileName = "config.json";
+    public const string ReportsDirName = "reports";
+    public const string RalphDirName = ".ralph";
+    public const string PrdFileName = "PRD.md";
+
+    public string GetRalphDir(string workingDirectory) =>
+        Path.Combine(workingDirectory, RalphDirName);
+
+    public string GetGuardrailsPath(string workingDirectory) =>
+        Path.Combine(GetRalphDir(workingDirectory), GuardrailsFileName);
+
+    public string GetProgressPath(string workingDirectory) =>
+        Path.Combine(GetRalphDir(workingDirectory), ProgressFileName);
+
+    public string GetErrorsLogPath(string workingDirectory) =>
+        Path.Combine(GetRalphDir(workingDirectory), ErrorsLogFileName);
+
+    public string GetActivityLogPath(string workingDirectory) =>
+        Path.Combine(GetRalphDir(workingDirectory), ActivityLogFileName);
+
+    public string GetStatePath(string workingDirectory) =>
+        Path.Combine(GetRalphDir(workingDirectory), StateFileName);
+
+    public string GetIterationPath(string workingDirectory) =>
+        Path.Combine(GetRalphDir(workingDirectory), IterationFileName);
+
+    public string GetConfigPath(string workingDirectory) =>
+        Path.Combine(GetRalphDir(workingDirectory), ConfigFileName);
+
+    public string GetReportsDir(string workingDirectory) =>
+        Path.Combine(GetRalphDir(workingDirectory), ReportsDirName);
+
+    public string GetLatestReportMarkdownPath(string workingDirectory) =>
+        Path.Combine(GetReportsDir(workingDirectory), "latest.md");
+
+    public string GetPrdPath(string workingDirectory) =>
+        Path.Combine(workingDirectory, PrdFileName);
+
+    public void Initialize(string workingDirectory, bool force = false)
+    {
+        var ralphDir = GetRalphDir(workingDirectory);
+        if (Directory.Exists(ralphDir) && !force)
+        {
+            EnsureFilesExist(workingDirectory);
+            return;
+        }
+        Directory.CreateDirectory(ralphDir);
+
+        WriteIfMissing(GetGuardrailsPath(workingDirectory), "# Guardrails\n\nAdd constraints and rules here.\n");
+        WriteIfMissing(GetProgressPath(workingDirectory), "# Progress\n\n");
+        WriteIfMissing(GetErrorsLogPath(workingDirectory), "");
+        WriteIfMissing(GetActivityLogPath(workingDirectory), "");
+        WriteIfMissing(GetStatePath(workingDirectory), "{\"iteration\":0,\"retries\":0}\n");
+        WriteIfMissing(GetIterationPath(workingDirectory), "0");
+        WriteIfMissing(GetConfigPath(workingDirectory), GetDefaultConfigContent());
+        WriteIfMissing(GetPrdPath(workingDirectory), GetDefaultPrdContent());
+        Directory.CreateDirectory(GetReportsDir(workingDirectory));
+
+        UpdateGitignore(workingDirectory);
+    }
+
+    private void EnsureFilesExist(string workingDirectory)
+    {
+        WriteIfMissing(GetGuardrailsPath(workingDirectory), "# Guardrails\n\nAdd constraints and rules here.\n");
+        WriteIfMissing(GetProgressPath(workingDirectory), "# Progress\n\n");
+        WriteIfMissing(GetErrorsLogPath(workingDirectory), "");
+        WriteIfMissing(GetActivityLogPath(workingDirectory), "");
+        WriteIfMissing(GetStatePath(workingDirectory), "{\"iteration\":0,\"retries\":0}\n");
+        WriteIfMissing(GetIterationPath(workingDirectory), "0");
+        WriteIfMissing(GetConfigPath(workingDirectory), GetDefaultConfigContent());
+        WriteIfMissing(GetPrdPath(workingDirectory), GetDefaultPrdContent());
+        Directory.CreateDirectory(GetReportsDir(workingDirectory));
+    }
+
+    private static string GetDefaultPrdContent() =>
+        "---\n" +
+        "task: Ralph task list\n" +
+        "engine: cursor\n" +
+        "---\n" +
+        "# PRD\n\n" +
+        "- [ ] First task: edit this file and add your tasks\n" +
+        "- [ ] Second task: use ralph run to process them\n";
+
+    private static string GetDefaultConfigContent()
+    {
+        return JsonSerializer.Serialize(RalphConfig.Default) + "\n";
+    }
+
+    private static void WriteIfMissing(string path, string content)
+    {
+        if (File.Exists(path)) return;
+        var dir = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(dir))
+            Directory.CreateDirectory(dir);
+        File.WriteAllText(path, content);
+    }
+
+    private static void UpdateGitignore(string workingDirectory)
+    {
+        var gitignorePath = Path.Combine(workingDirectory, ".gitignore");
+        var entry = "\n.ralph/\n";
+        if (!File.Exists(gitignorePath))
+        {
+            File.WriteAllText(gitignorePath, "# Ralph\n.ralph/\n");
+            return;
+        }
+        var content = File.ReadAllText(gitignorePath);
+        if (content.Contains(".ralph/", StringComparison.Ordinal))
+            return;
+        File.AppendAllText(gitignorePath, entry);
+    }
+
+    public bool IsInitialized(string workingDirectory)
+    {
+        var ralphDir = GetRalphDir(workingDirectory);
+        if (!Directory.Exists(ralphDir)) return false;
+        return File.Exists(GetStatePath(workingDirectory));
+    }
+}

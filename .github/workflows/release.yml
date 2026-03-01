@@ -1,0 +1,85 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore Ralph.sln
+
+      - name: Test
+        run: dotnet test Ralph.sln --no-restore --configuration Release
+
+      - name: Resolve version
+        run: echo "RALPH_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Publish win-x64
+        run: |
+          dotnet publish src/Ralph.Cli/Ralph.Cli.csproj \
+            -c Release -r win-x64 --self-contained \
+            -p:PublishSingleFile=true \
+            -p:Version=${{ env.RALPH_VERSION }} \
+            -o publish/win-x64
+
+      - name: Publish linux-x64
+        run: |
+          dotnet publish src/Ralph.Cli/Ralph.Cli.csproj \
+            -c Release -r linux-x64 --self-contained \
+            -p:PublishSingleFile=true \
+            -p:Version=${{ env.RALPH_VERSION }} \
+            -o publish/linux-x64
+
+      - name: Publish osx-x64
+        run: |
+          dotnet publish src/Ralph.Cli/Ralph.Cli.csproj \
+            -c Release -r osx-x64 --self-contained \
+            -p:PublishSingleFile=true \
+            -p:Version=${{ env.RALPH_VERSION }} \
+            -o publish/osx-x64
+
+      - name: Publish osx-arm64
+        run: |
+          dotnet publish src/Ralph.Cli/Ralph.Cli.csproj \
+            -c Release -r osx-arm64 --self-contained \
+            -p:PublishSingleFile=true \
+            -p:Version=${{ env.RALPH_VERSION }} \
+            -o publish/osx-arm64
+
+      - name: Rename artifacts
+        run: |
+          mv publish/win-x64/ralph.exe   publish/win-x64/ralph-win-x64.exe
+          mv publish/linux-x64/ralph     publish/linux-x64/ralph-linux-x64
+          mv publish/osx-x64/ralph       publish/osx-x64/ralph-osx-x64
+          mv publish/osx-arm64/ralph     publish/osx-arm64/ralph-osx-arm64
+
+      - name: Package language files
+        run: |
+          mkdir -p publish/lang
+          cp lang/*.json publish/lang/
+          cd publish/lang
+          zip -q ralph-lang.zip ./*.json
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            publish/win-x64/ralph-win-x64.exe
+            publish/linux-x64/ralph-linux-x64
+            publish/osx-x64/ralph-osx-x64
+            publish/osx-arm64/ralph-osx-arm64
+            publish/lang/ralph-lang.zip

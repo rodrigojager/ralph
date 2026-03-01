@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Ralph.Core\Ralph.Core.csproj" />
+    <ProjectReference Include="..\Ralph.Tasks\Ralph.Tasks.csproj" />
+    <ProjectReference Include="..\Ralph.Engines\Ralph.Engines.csproj" />
+    <ProjectReference Include="..\Ralph.Persistence\Ralph.Persistence.csproj" />
+    <ProjectReference Include="..\Ralph.UI.Abstractions\Ralph.UI.Abstractions.csproj" />
+    <ProjectReference Include="..\Ralph.UI.Console\Ralph.UI.Console.csproj" />
+    <ProjectReference Include="..\Ralph.UI.Gum\Ralph.UI.Gum.csproj" />
+    <ProjectReference Include="..\Ralph.UI.Spectre\Ralph.UI.Spectre.csproj" />
+    <ProjectReference Include="..\Ralph.UI.Tui\Ralph.UI.Tui.csproj" />
+  </ItemGroup>
+
+  <!-- Copy lang files next to the output binary -->
+  <ItemGroup>
+    <Content Include="..\..\lang\*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>lang\%(Filename)%(Extension)</TargetPath>
+    </Content>
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>ralph</AssemblyName>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RuntimeIdentifiers>win-x64;linux-x64;osx-x64;osx-arm64</RuntimeIdentifiers>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <PublishTrimmed>false</PublishTrimmed>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+
+</Project>

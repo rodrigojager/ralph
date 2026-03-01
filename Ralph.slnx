@@ -1,0 +1,15 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Ralph.Cli/Ralph.Cli.csproj" />
+    <Project Path="src/Ralph.Core/Ralph.Core.csproj" />
+    <Project Path="src/Ralph.Engines/Ralph.Engines.csproj" />
+    <Project Path="src/Ralph.Persistence/Ralph.Persistence.csproj" />
+    <Project Path="src/Ralph.Tasks/Ralph.Tasks.csproj" />
+    <Project Path="src/Ralph.UI.Abstractions/Ralph.UI.Abstractions.csproj" />
+    <Project Path="src/Ralph.UI.Console/Ralph.UI.Console.csproj" />
+    <Project Path="src/Ralph.UI.Gum/Ralph.UI.Gum.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Ralph.Tests/Ralph.Tests.csproj" />
+  </Folder>
+</Solution>

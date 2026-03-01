@@ -100,6 +100,11 @@ public sealed class ConfigCommand
             Console.WriteLine(config.Run?.NoChangeMaxAttempts?.ToString() ?? "");
             return;
         }
+        if (key.Equals("run.no_change_stop_on_max_attempts", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine(config.Run?.NoChangeStopOnMaxAttempts?.ToString().ToLowerInvariant() ?? "");
+            return;
+        }
         if (key.Equals("run.include_progress_context", StringComparison.OrdinalIgnoreCase))
         {
             Console.WriteLine(config.Run?.IncludeProgressContext?.ToString().ToLowerInvariant() ?? "");
@@ -236,6 +241,19 @@ public sealed class ConfigCommand
             }
             config.Run ??= new RunConfigEntry();
             config.Run.NoChangeMaxAttempts = Math.Max(1, attempts);
+            _configStore.Save(configPath, config);
+            Console.WriteLine(s.Format("config.set_ok", key, value));
+            return;
+        }
+        if (key.Equals("run.no_change_stop_on_max_attempts", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!bool.TryParse(value, out var stopOnMaxAttempts))
+            {
+                Console.Error.WriteLine(s.Get("config.invalid_bool"));
+                return;
+            }
+            config.Run ??= new RunConfigEntry();
+            config.Run.NoChangeStopOnMaxAttempts = stopOnMaxAttempts;
             _configStore.Save(configPath, config);
             Console.WriteLine(s.Format("config.set_ok", key, value));
             return;

@@ -15,7 +15,7 @@ public class NoChangePolicyTests
         Assert.NotNull(policyType);
         var failFast = Enum.Parse(policyType!, "FailFast");
 
-        var action = method!.Invoke(null, new object[] { failFast, 0, 3, 0, 4 });
+        var action = method!.Invoke(null, new object[] { failFast, 0, 3, true, 0, 4 });
         Assert.Equal("FailFast", action?.ToString());
     }
 }

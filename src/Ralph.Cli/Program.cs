@@ -84,6 +84,10 @@ var draftPr = false;
 var retryFailed = false;
 var autoRollback = false;
 var debugEngineJson = false;
+var ignoreContextStops = true;
+var noChangePolicyOverride = (string?)null;
+var noChangeMaxAttemptsOverride = (int?)null;
+var noChangeStopOnMaxAttemptsOverride = (bool?)null;
 var parallelIntegration = (string?)null;
 var positionals = new List<string>();
 var passthroughArgs = new List<string>();
@@ -128,6 +132,35 @@ while (i < argsList.Count)
     if (a == "--parallel-integration" && i + 1 < argsList.Count) { parallelIntegration = argsList[i + 1]; i += 2; continue; }
     if (a == "--auto-rollback") { autoRollback = true; i++; continue; }
     if (a == "--debug-engine-json") { debugEngineJson = true; i++; continue; }
+    if (a == "--ignore-context-stops") { ignoreContextStops = true; i++; continue; }
+    if (a == "--respect-context-stops") { ignoreContextStops = false; i++; continue; }
+    if (a == "--ignore-gutter") { ignoreContextStops = true; i++; continue; } // backward-compatible alias
+    if (a == "--respect-gutter") { ignoreContextStops = false; i++; continue; } // backward-compatible alias
+    if (a == "--no-change-policy" && i + 1 < argsList.Count)
+    {
+        var policy = argsList[i + 1].Trim().ToLowerInvariant();
+        if (policy is not ("fallback" or "retry" or "fail-fast"))
+        {
+            Console.Error.WriteLine(s.Get("config.invalid_no_change_policy"));
+            return 1;
+        }
+        noChangePolicyOverride = policy;
+        i += 2;
+        continue;
+    }
+    if (a == "--no-change-max-retries" && i + 1 < argsList.Count)
+    {
+        if (!int.TryParse(argsList[i + 1], out var attempts))
+        {
+            Console.Error.WriteLine(s.Get("config.invalid_int"));
+            return 1;
+        }
+        noChangeMaxAttemptsOverride = Math.Max(1, attempts);
+        i += 2;
+        continue;
+    }
+    if (a == "--no-change-stop-on-max-retries") { noChangeStopOnMaxAttemptsOverride = true; i++; continue; }
+    if (a == "--no-change-continue-on-max-retries") { noChangeStopOnMaxAttemptsOverride = false; i++; continue; }
     if (a == "--verbose" || a == "-v") { verbose = true; i++; continue; }
     if (a == "--branch-per-task") { branchPerTask = true; i++; continue; }
     if (a == "--base-branch" && i + 1 < argsList.Count) { baseBranch = argsList[i + 1]; i += 2; continue; }
@@ -398,8 +431,8 @@ try
             // startup code does NOT write to the console before Terminal.Gui takes
             // over. Then run Terminal.Gui blocking on the MAIN THREAD.
             var cmdTask = command == "run"
-                ? Task.Run(() => runCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, maxIterations: maxIterations, dryRun: dryRun, verbose: verbose, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, cancellationToken: cancellation.Token))
-                : Task.Run(() => onceCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, verbose: verbose, taskOverride: inlineTask, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, cancellationToken: cancellation.Token));
+                ? Task.Run(() => runCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, maxIterations: maxIterations, dryRun: dryRun, verbose: verbose, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, cancellationToken: cancellation.Token))
+                : Task.Run(() => onceCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, verbose: verbose, taskOverride: inlineTask, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, cancellationToken: cancellation.Token));
 
             tuiDashboard.MonitoredTask = cmdTask;
             try
@@ -417,12 +450,12 @@ try
 
         // Non-TUI path: direct async execution.
         if (command == "run")
-            return await runCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, maxIterations: maxIterations, dryRun: dryRun, verbose: verbose, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, cancellationToken: cancellation.Token);
+            return await runCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, maxIterations: maxIterations, dryRun: dryRun, verbose: verbose, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, cancellationToken: cancellation.Token);
 
         if (inlineTask != null)
-            return await onceCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, verbose: verbose, taskOverride: inlineTask, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, cancellationToken: cancellation.Token);
+            return await onceCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, verbose: verbose, taskOverride: inlineTask, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, cancellationToken: cancellation.Token);
 
-        return await onceCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, verbose: verbose, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, cancellationToken: cancellation.Token);
+        return await onceCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, verbose: verbose, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, cancellationToken: cancellation.Token);
     }
 }
 catch (OperationCanceledException)

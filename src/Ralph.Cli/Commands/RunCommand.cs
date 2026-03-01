@@ -32,6 +32,10 @@ public sealed class RunCommand
         bool draftPr = false,
         bool autoRollback = false,
         bool debugEngineJson = false,
+        bool ignoreContextStops = true,
+        string? noChangePolicyOverride = null,
+        int? noChangeMaxAttemptsOverride = null,
+        bool? noChangeStopOnMaxAttemptsOverride = null,
         CancellationToken cancellationToken = default)
     {
         if (dryRun)
@@ -58,7 +62,11 @@ public sealed class RunCommand
             createPr,
             draftPr,
             autoRollback,
-            debugEngineJson);
+            debugEngineJson,
+            ignoreContextStops,
+            noChangePolicyOverride,
+            noChangeMaxAttemptsOverride,
+            noChangeStopOnMaxAttemptsOverride);
         return result.Completed ? 0 : (result.Gutter ? 2 : 1);
     }
 }

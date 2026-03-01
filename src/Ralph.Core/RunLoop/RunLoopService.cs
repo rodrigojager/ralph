@@ -82,7 +82,11 @@ public sealed class RunLoopService
         bool createPr = false,
         bool draftPr = false,
         bool autoRollback = false,
-        bool debugEngineJson = false)
+        bool debugEngineJson = false,
+        bool ignoreContextStops = true,
+        string? noChangePolicyOverride = null,
+        int? noChangeMaxAttemptsOverride = null,
+        bool? noChangeStopOnMaxAttemptsOverride = null)
     {
         if (!_workspaceInit.IsInitialized(workingDirectory))
             _workspaceInit.Initialize(workingDirectory);
@@ -163,8 +167,9 @@ public sealed class RunLoopService
             var configPath = _workspaceInit.GetConfigPath(workingDirectory);
             var config = File.Exists(configPath) ? new ConfigStore().Load(configPath) : RalphConfig.Default;
             var rotationConfig = config.ContextRotation ?? new ContextRotationConfigEntry { OnSignal = "warn" };
-            var noChangePolicy = ParseNoChangePolicy(config.Run?.NoChangePolicy);
-            var noChangeMaxAttempts = Math.Max(1, config.Run?.NoChangeMaxAttempts ?? 3);
+            var noChangePolicy = ParseNoChangePolicy(noChangePolicyOverride ?? config.Run?.NoChangePolicy);
+            var noChangeMaxAttempts = Math.Max(1, noChangeMaxAttemptsOverride ?? config.Run?.NoChangeMaxAttempts ?? 3);
+            var noChangeStopOnMaxAttempts = noChangeStopOnMaxAttemptsOverride ?? config.Run?.NoChangeStopOnMaxAttempts ?? true;
             var includeProgressContext = config.Run?.IncludeProgressContext ?? false;
             var engineNameToUse = engineName ?? doc.Frontmatter?.Engine ?? "cursor";
             var engineCandidates = BuildEngineCandidates(engineNameToUse, config);
@@ -355,7 +360,7 @@ public sealed class RunLoopService
                         foreach (var line in result.Stdout.TrimEnd().Split('\n'))
                             _ui.WriteVerbose($"  stdout: {line.TrimEnd()}");
                 }
-                if (_gutterDetector.IsGutter)
+                if (_gutterDetector.IsGutter && !ignoreContextStops)
                 {
                     _ui.WriteWarn(_s.Format("run.gutter_details", _retryPolicy.MaxRetries));
                     _ui.WriteInfo(_s.Format("run.summary_partial", completedTasks, totalTasks));
@@ -366,6 +371,12 @@ public sealed class RunLoopService
                     reportEntries.Add(BuildReportEntry(taskEntry.DisplayText, activeEngineName, taskStartedAt, DateTimeOffset.UtcNow, result?.ExitCode ?? -1, attempt, taskInputTokens, taskOutputTokens, "gutter"));
                     WriteRunReport(workingDirectory, runStartedAt, gutterResult.Completed, reportEntries);
                     return gutterResult;
+                }
+                if (_gutterDetector.IsGutter && ignoreContextStops)
+                {
+                    _ui.WriteWarn(_s.Format("run.gutter_details", _retryPolicy.MaxRetries));
+                    _ui.WriteWarn(_s.Get("run.gutter_ignored"));
+                    _gutterDetector.Reset();
                 }
                 if (!_retryPolicy.ShouldRetry(result, attempt))
                     break;
@@ -390,19 +401,33 @@ public sealed class RunLoopService
                 }
                 else if (outcome == ContextRotationOutcome.Defer)
                 {
-                    _ui.WriteWarn(_s.Get("run.context_signal_defer"));
-                    WriteSessionTokensSummary(sessionInputTokens, sessionOutputTokens);
-                    var deferred = new RunLoopResult { Completed = false };
-                    WriteRunReport(workingDirectory, runStartedAt, deferred.Completed, reportEntries);
-                    return deferred;
+                    if (ignoreContextStops)
+                    {
+                        _ui.WriteWarn(_s.Get("run.context_signal_defer_ignored"));
+                    }
+                    else
+                    {
+                        _ui.WriteWarn(_s.Get("run.context_signal_defer"));
+                        WriteSessionTokensSummary(sessionInputTokens, sessionOutputTokens);
+                        var deferred = new RunLoopResult { Completed = false };
+                        WriteRunReport(workingDirectory, runStartedAt, deferred.Completed, reportEntries);
+                        return deferred;
+                    }
                 }
                 else if (outcome == ContextRotationOutcome.Gutter)
                 {
-                    _ui.WriteWarn(_s.Get("run.context_signal_gutter"));
-                    WriteSessionTokensSummary(sessionInputTokens, sessionOutputTokens);
-                    var gutter = new RunLoopResult { Completed = false, Gutter = true };
-                    WriteRunReport(workingDirectory, runStartedAt, gutter.Completed, reportEntries);
-                    return gutter;
+                    if (ignoreContextStops)
+                    {
+                        _ui.WriteWarn(_s.Get("run.context_signal_gutter_ignored"));
+                    }
+                    else
+                    {
+                        _ui.WriteWarn(_s.Get("run.context_signal_gutter"));
+                        WriteSessionTokensSummary(sessionInputTokens, sessionOutputTokens);
+                        var gutter = new RunLoopResult { Completed = false, Gutter = true };
+                        WriteRunReport(workingDirectory, runStartedAt, gutter.Completed, reportEntries);
+                        return gutter;
+                    }
                 }
             }
 
@@ -428,7 +453,7 @@ public sealed class RunLoopService
             {
                 _ui.WriteWarn(_s.Get("run.no_changes"));
                 _terminalView?.SetStatus(_s.Get("run.status_no_workspace_changes"));
-                var noChangeAction = ResolveNoChangeAction(noChangePolicy, attempt, noChangeMaxAttempts, engineCandidateIndex, engineCandidates.Count);
+                var noChangeAction = ResolveNoChangeAction(noChangePolicy, attempt, noChangeMaxAttempts, noChangeStopOnMaxAttempts, engineCandidateIndex, engineCandidates.Count);
                 if (noChangeAction == NoChangeAction.Retry && attempt + 1 < noChangeMaxAttempts)
                 {
                     attempt++;
@@ -470,7 +495,7 @@ public sealed class RunLoopService
                     }
                 }
                 _gutterDetector.RecordAttempt(nextIndex.Value, false);
-                if (_gutterDetector.IsGutter)
+                if (_gutterDetector.IsGutter && !ignoreContextStops)
                 {
                     _ui.WriteWarn(_s.Format("run.gutter_details", _retryPolicy.MaxRetries));
                     _ui.WriteInfo(_s.Format("run.summary_partial", completedTasks, totalTasks));
@@ -482,9 +507,17 @@ public sealed class RunLoopService
                     WriteRunReport(workingDirectory, runStartedAt, noChangeGutter.Completed, reportEntries);
                     return noChangeGutter;
                 }
+                if (_gutterDetector.IsGutter && ignoreContextStops)
+                {
+                    _ui.WriteWarn(_s.Format("run.gutter_details", _retryPolicy.MaxRetries));
+                    _ui.WriteWarn(_s.Get("run.gutter_ignored"));
+                    _gutterDetector.Reset();
+                }
                 reportEntries.Add(BuildReportEntry(taskEntry.DisplayText, activeEngineName, taskStartedAt, DateTimeOffset.UtcNow, result?.ExitCode ?? -1, attempt, taskInputTokens, taskOutputTokens, "no_changes"));
                 if (noChangeAction == NoChangeAction.FailFast)
                 {
+                    if (noChangePolicy == NoChangePolicy.Retry && noChangeStopOnMaxAttempts)
+                        _ui.WriteWarn(_s.Format("run.no_change_max_retries_stop", noChangeMaxAttempts));
                     _ui.WriteWarn(_s.Get("run.no_change_fail_fast"));
                     WriteRunReport(workingDirectory, runStartedAt, false, reportEntries);
                     return new RunLoopResult { Completed = false };
@@ -504,7 +537,7 @@ public sealed class RunLoopService
                     _ui.WriteWarn(_s.Get("run.lint_failed_not_marked"));
                     _terminalView?.SetStatus(_s.Get("run.status_lint_failed"));
                     _gutterDetector.RecordAttempt(nextIndex.Value, false);
-                    if (_gutterDetector.IsGutter)
+                    if (_gutterDetector.IsGutter && !ignoreContextStops)
                     {
                         _ui.WriteInfo(_s.Format("run.summary_partial", completedTasks, totalTasks));
                         WriteSessionTokensSummary(sessionInputTokens, sessionOutputTokens);
@@ -513,6 +546,12 @@ public sealed class RunLoopService
                         reportEntries.Add(BuildReportEntry(taskEntry.DisplayText, activeEngineName, taskStartedAt, DateTimeOffset.UtcNow, result?.ExitCode ?? -1, attempt, taskInputTokens, taskOutputTokens, "gutter"));
                         WriteRunReport(workingDirectory, runStartedAt, lintGutter.Completed, reportEntries);
                         return lintGutter;
+                    }
+                    if (_gutterDetector.IsGutter && ignoreContextStops)
+                    {
+                        _ui.WriteWarn(_s.Format("run.gutter_details", _retryPolicy.MaxRetries));
+                        _ui.WriteWarn(_s.Get("run.gutter_ignored"));
+                        _gutterDetector.Reset();
                     }
                     AttemptRollbackIfEnabled(workingDirectory, taskSnapshot, taskEntry.DisplayText, "lint_failed", errorsPath);
                     reportEntries.Add(BuildReportEntry(taskEntry.DisplayText, activeEngineName, taskStartedAt, DateTimeOffset.UtcNow, result?.ExitCode ?? -1, attempt, taskInputTokens, taskOutputTokens, "lint_failed"));
@@ -530,7 +569,7 @@ public sealed class RunLoopService
                     _ui.WriteWarn(_s.Get("run.tests_failed_not_marked"));
                     _terminalView?.SetStatus(_s.Get("run.status_tests_failed"));
                     _gutterDetector.RecordAttempt(nextIndex.Value, false);
-                    if (_gutterDetector.IsGutter)
+                    if (_gutterDetector.IsGutter && !ignoreContextStops)
                     {
                         _ui.WriteInfo(_s.Format("run.summary_partial", completedTasks, totalTasks));
                         WriteSessionTokensSummary(sessionInputTokens, sessionOutputTokens);
@@ -539,6 +578,12 @@ public sealed class RunLoopService
                         reportEntries.Add(BuildReportEntry(taskEntry.DisplayText, activeEngineName, taskStartedAt, DateTimeOffset.UtcNow, result?.ExitCode ?? -1, attempt, taskInputTokens, taskOutputTokens, "gutter"));
                         WriteRunReport(workingDirectory, runStartedAt, testGutter.Completed, reportEntries);
                         return testGutter;
+                    }
+                    if (_gutterDetector.IsGutter && ignoreContextStops)
+                    {
+                        _ui.WriteWarn(_s.Format("run.gutter_details", _retryPolicy.MaxRetries));
+                        _ui.WriteWarn(_s.Get("run.gutter_ignored"));
+                        _gutterDetector.Reset();
                     }
                     AttemptRollbackIfEnabled(workingDirectory, taskSnapshot, taskEntry.DisplayText, "tests_failed", errorsPath);
                     reportEntries.Add(BuildReportEntry(taskEntry.DisplayText, activeEngineName, taskStartedAt, DateTimeOffset.UtcNow, result?.ExitCode ?? -1, attempt, taskInputTokens, taskOutputTokens, "tests_failed"));
@@ -555,11 +600,17 @@ public sealed class RunLoopService
                     _ui.WriteWarn(_s.Get("run.browser_failed_not_marked"));
                     _terminalView?.SetStatus(_s.Get("run.status_browser_failed"));
                     _gutterDetector.RecordAttempt(nextIndex.Value, false);
-                    if (_gutterDetector.IsGutter)
+                    if (_gutterDetector.IsGutter && !ignoreContextStops)
                     {
                         _ui.WriteInfo(_s.Format("run.summary_partial", completedTasks, totalTasks));
                         WriteSessionTokensSummary(sessionInputTokens, sessionOutputTokens);
                         return new RunLoopResult { Completed = false, Gutter = true };
+                    }
+                    if (_gutterDetector.IsGutter && ignoreContextStops)
+                    {
+                        _ui.WriteWarn(_s.Format("run.gutter_details", _retryPolicy.MaxRetries));
+                        _ui.WriteWarn(_s.Get("run.gutter_ignored"));
+                        _gutterDetector.Reset();
                     }
                     AttemptRollbackIfEnabled(workingDirectory, taskSnapshot, taskEntry.DisplayText, "browser_failed", errorsPath);
                     reportEntries.Add(BuildReportEntry(taskEntry.DisplayText, activeEngineName, taskStartedAt, DateTimeOffset.UtcNow, result?.ExitCode ?? -1, attempt, taskInputTokens, taskOutputTokens, "browser_failed"));
@@ -726,7 +777,11 @@ public sealed class RunLoopService
         bool createPr = false,
         bool draftPr = false,
         bool autoRollback = false,
-        bool debugEngineJson = false)
+        bool debugEngineJson = false,
+        bool ignoreContextStops = true,
+        string? noChangePolicyOverride = null,
+        int? noChangeMaxAttemptsOverride = null,
+        bool? noChangeStopOnMaxAttemptsOverride = null)
     {
         return await RunAsync(
             workingDirectory,
@@ -746,7 +801,11 @@ public sealed class RunLoopService
             createPr,
             draftPr,
             autoRollback,
-            debugEngineJson);
+            debugEngineJson,
+            ignoreContextStops,
+            noChangePolicyOverride,
+            noChangeMaxAttemptsOverride,
+            noChangeStopOnMaxAttemptsOverride);
     }
 
     public async Task<RunLoopResult> RunSingleTaskAsync(
@@ -1304,11 +1363,14 @@ public sealed class RunLoopService
         NoChangePolicy policy,
         int currentAttempt,
         int maxAttempts,
+        bool stopOnMaxAttempts,
         int currentEngineIndex,
         int totalEngines)
     {
         if (policy == NoChangePolicy.Retry)
-            return currentAttempt + 1 < maxAttempts ? NoChangeAction.Retry : NoChangeAction.Continue;
+            return currentAttempt + 1 < maxAttempts
+                ? NoChangeAction.Retry
+                : (stopOnMaxAttempts ? NoChangeAction.FailFast : NoChangeAction.Continue);
 
         if (policy == NoChangePolicy.FailFast)
             return NoChangeAction.FailFast;

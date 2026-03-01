@@ -47,6 +47,7 @@ public sealed class RalphConfig
         {
             NoChangePolicy = "fallback",
             NoChangeMaxAttempts = 3,
+            NoChangeStopOnMaxAttempts = true,
             IncludeProgressContext = false
         }
     };
@@ -89,6 +90,9 @@ public sealed class RunConfigEntry
 
     [JsonPropertyName("no_change_max_attempts")]
     public int? NoChangeMaxAttempts { get; set; }
+
+    [JsonPropertyName("no_change_stop_on_max_attempts")]
+    public bool? NoChangeStopOnMaxAttempts { get; set; }
 
     [JsonPropertyName("include_progress_context")]
     public bool? IncludeProgressContext { get; set; }

@@ -63,6 +63,12 @@ public class ParallelGitIntegrationTests
     {
         var hookPath = Path.Combine(dir, ".git", "hooks", "pre-commit");
         File.WriteAllText(hookPath, "#!/bin/sh\r\nexit 1\r\n");
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(
+                hookPath,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+                UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
+                UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
     }
 
     private static bool RunGit(string workingDirectory, string arguments)

@@ -37,10 +37,11 @@ public class CliProcessContractTests
 
     private static (int ExitCode, string Stdout, string Stderr) RunCli(string workingDirectory, string arguments, string? pathOverride = null)
     {
+        var root = FindRepositoryRoot();
         var psi = new ProcessStartInfo
         {
             FileName = ResolveDotnetExecutablePath(),
-            Arguments = $"\"{GetCliDllPath()}\" {arguments}",
+            Arguments = $"run --project \"{Path.Combine(root, "src", "Ralph.Cli", "Ralph.Cli.csproj")}\" --no-build --configuration {GetBuildConfiguration()} -- {arguments}",
             WorkingDirectory = workingDirectory,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -55,20 +56,6 @@ public class CliProcessContractTests
         var stderr = process.StandardError.ReadToEnd();
         process.WaitForExit(30_000);
         return (process.ExitCode, stdout, stderr);
-    }
-
-    private static string GetCliDllPath()
-    {
-        var root = FindRepositoryRoot();
-        var cliBuildPath = Path.Combine(root, "src", "Ralph.Cli", "bin", "Debug", "net8.0", "win-x64", "ralph.dll");
-        if (File.Exists(cliBuildPath))
-            return cliBuildPath;
-
-        var fallback = Path.Combine(AppContext.BaseDirectory, "ralph.dll");
-        if (File.Exists(fallback))
-            return fallback;
-
-        throw new FileNotFoundException($"CLI dll not found at {cliBuildPath}");
     }
 
     private static string ResolveDotnetExecutablePath()
@@ -103,6 +90,11 @@ public class CliProcessContractTests
 
         throw new DirectoryNotFoundException("Repository root not found.");
     }
+
+    private static string GetBuildConfiguration() =>
+        AppContext.BaseDirectory.Contains($"{Path.DirectorySeparatorChar}Release{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
+            ? "Release"
+            : "Debug";
 
     private static string CreateTempDir()
     {

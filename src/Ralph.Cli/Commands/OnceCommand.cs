@@ -21,6 +21,7 @@ public sealed class OnceCommand
         int? maxTokens = null,
         double? temperature = null,
         IReadOnlyList<string>? extraArgs = null,
+        bool dryRun = false,
         bool verbose = false,
         string? taskOverride = null,
         bool branchPerTask = false,
@@ -35,6 +36,28 @@ public sealed class OnceCommand
         bool? noChangeStopOnMaxAttemptsOverride = null,
         CancellationToken cancellationToken = default)
     {
+        if (dryRun)
+        {
+            var dryResult = taskOverride != null
+                ? await _runLoop.DryRunSingleTaskAsync(
+                    workingDirectory,
+                    taskOverride,
+                    engine,
+                    model,
+                    maxTokens,
+                    temperature,
+                    extraArgs)
+                : await _runLoop.DryRunAsync(
+                    workingDirectory,
+                    prdPath,
+                    engine,
+                    model,
+                    maxTokens,
+                    temperature,
+                    maxIterations: 1);
+            return dryResult.Completed ? 0 : 1;
+        }
+
         if (taskOverride != null)
         {
             var brownfieldResult = await _runLoop.RunSingleTaskAsync(

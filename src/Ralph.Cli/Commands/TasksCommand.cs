@@ -19,7 +19,7 @@ public sealed class TasksCommand
                 for (var i = 0; i < doc.TaskEntries.Count; i++)
                 {
                     var e = doc.TaskEntries[i];
-                    var mark = e.IsCompleted ? "[x]" : "[ ]";
+                    var mark = e.Marker;
                     Console.WriteLine($"  {i + 1}. {mark} {e.DisplayText}");
                 }
                 return 0;

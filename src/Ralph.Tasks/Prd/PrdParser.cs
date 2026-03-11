@@ -6,7 +6,7 @@ namespace Ralph.Tasks.Prd;
 public static class PrdParser
 {
     private static readonly Regex TaskLineRegex = new(
-        @"^(\s*)-\s+\[([ xX])\]\s*(.*)$",
+        @"^(\s*)-\s+\[([ xX~])\]\s*(.*)$",
         RegexOptions.Compiled);
 
     public static PrdDocument Parse(string fullPath)
@@ -61,12 +61,12 @@ public static class PrdParser
             var match = TaskLineRegex.Match(line);
             if (match.Success)
             {
-                var completed = match.Groups[2].Value.Trim().Equals("x", StringComparison.OrdinalIgnoreCase);
+                var status = ParseTaskStatusMarker(match.Groups[2].Value);
                 var displayText = match.Groups[3].Value.Trim();
                 taskEntries.Add(new PrdTaskEntry
                 {
                     LineIndex = i,
-                    IsCompleted = completed,
+                    Status = status,
                     RawLine = line,
                     DisplayText = displayText
                 });
@@ -146,12 +146,12 @@ public static class PrdParser
 
             var match = TaskLineRegex.Match(line);
             if (!match.Success) continue;
-            var completed = match.Groups[2].Value.Trim().Equals("x", StringComparison.OrdinalIgnoreCase);
+            var status = ParseTaskStatusMarker(match.Groups[2].Value);
             var displayText = match.Groups[3].Value.Trim();
             taskEntries.Add(new PrdTaskEntry
             {
                 LineIndex = i,
-                IsCompleted = completed,
+                Status = status,
                 RawLine = line,
                 DisplayText = displayText
             });
@@ -185,11 +185,11 @@ public static class PrdParser
             foreach (var item in doc.RootElement.EnumerateArray())
             {
                 var text = TryGetString(item, "text") ?? TryGetString(item, "task") ?? $"Task {idx + 1}";
-                var completed = TryGetBool(item, "completed") ?? false;
+                var status = TryGetTaskStatus(item);
                 tasks.Add(new PrdTaskEntry
                 {
                     LineIndex = idx,
-                    IsCompleted = completed,
+                    Status = status,
                     RawLine = text,
                     DisplayText = text
                 });
@@ -221,5 +221,26 @@ public static class PrdParser
         if (!item.TryGetProperty(property, out var p))
             return null;
         return p.ValueKind == JsonValueKind.True || p.ValueKind == JsonValueKind.False ? p.GetBoolean() : null;
+    }
+
+    private static PrdTaskStatus ParseTaskStatusMarker(string raw)
+    {
+        var marker = raw.Trim();
+        if (marker.Equals("x", StringComparison.OrdinalIgnoreCase))
+            return PrdTaskStatus.Completed;
+        if (marker == "~")
+            return PrdTaskStatus.SkippedForReview;
+        return PrdTaskStatus.Pending;
+    }
+
+    private static PrdTaskStatus TryGetTaskStatus(JsonElement item)
+    {
+        var status = TryGetString(item, "status")?.Trim().ToLowerInvariant();
+        return status switch
+        {
+            "completed" or "done" => PrdTaskStatus.Completed,
+            "skipped_for_review" or "skipped-review" or "manual_review" or "manual-review" => PrdTaskStatus.SkippedForReview,
+            _ => (TryGetBool(item, "completed") ?? false) ? PrdTaskStatus.Completed : PrdTaskStatus.Pending
+        };
     }
 }

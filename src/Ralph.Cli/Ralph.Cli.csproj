@@ -20,6 +20,12 @@
     </Content>
   </ItemGroup>
 
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>Ralph.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
@@ -30,7 +36,7 @@
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <PublishTrimmed>false</PublishTrimmed>
-    <Version>0.1.1</Version>
+    <Version>0.1.2</Version>
   </PropertyGroup>
 
 </Project>

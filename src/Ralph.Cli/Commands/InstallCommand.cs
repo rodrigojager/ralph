@@ -1,5 +1,6 @@
 using Ralph.Core.Config;
 using Ralph.Core.Localization;
+using Ralph.Cli.Infrastructure;
 using Spectre.Console;
 
 namespace Ralph.Cli.Commands;
@@ -8,7 +9,7 @@ public sealed class InstallCommand
 {
     public int Execute(string? targetDir = null)
     {
-        var exePath = Environment.ProcessPath;
+        var exePath = CurrentExecutableLocator.Resolve();
         if (string.IsNullOrEmpty(exePath))
         {
             AnsiConsole.MarkupLine("[red]Could not determine executable path.[/]");
@@ -79,7 +80,7 @@ public sealed class InstallCommand
         // ── 6. Copy binary ────────────────────────────────────────────────────
         var destName = OperatingSystem.IsWindows() ? "ralph.exe" : "ralph";
         var destPath = Path.Combine(target, destName);
-        var sourcePath = GetInstallableExecutablePath(exePath);
+        var sourcePath = exePath;
         if (sourcePath == null)
         {
             AnsiConsole.MarkupLine("[red]Could not determine executable to install. Run install from a published build (e.g. dotnet publish then run the produced ralph.exe).[/]");
@@ -175,31 +176,6 @@ public sealed class InstallCommand
     }
 
     // ── Path & file helpers ───────────────────────────────────────────────────
-
-    /// <summary>
-    /// Returns the path of the executable file to copy. If the process was started from a .dll
-    /// (e.g. dotnet run), returns the matching .exe in the same directory so we install the host, not the dll.
-    /// </summary>
-    private static string? GetInstallableExecutablePath(string exePath)
-    {
-        if (string.IsNullOrEmpty(exePath) || !File.Exists(exePath))
-            return null;
-        var ext = Path.GetExtension(exePath);
-        if (ext.Equals(".exe", StringComparison.OrdinalIgnoreCase))
-            return exePath;
-        if (ext.Equals(".dll", StringComparison.OrdinalIgnoreCase))
-        {
-            var dir = Path.GetDirectoryName(exePath);
-            var name = Path.GetFileNameWithoutExtension(exePath) + ".exe";
-            var hostExe = dir == null ? name : Path.Combine(dir, name);
-            if (File.Exists(hostExe))
-                return hostExe;
-            // No host exe (e.g. self-contained single-file was run as dll); copy the dll as ralph.exe is wrong.
-            // Prefer failing so user runs from a proper publish.
-            return null;
-        }
-        return exePath;
-    }
 
     private static string? FindInPath(string binary)
     {

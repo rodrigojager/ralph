@@ -23,7 +23,7 @@ public sealed class CleanCommand
         if (!force)
         {
             Console.WriteLine(s.Get("clean.force_required"));
-            return 0;
+            return 1;
         }
         try
         {

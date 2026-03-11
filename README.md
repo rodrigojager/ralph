@@ -38,6 +38,12 @@ O `PRD.md` contém uma lista de tarefas com checkboxes:
 \- \[ \] Criar testes unitários  
 \- \[ \] Ajustar DI
 
+Marcadores suportados:
+
+- `- [ ]` tarefa pendente
+- `- [x]` tarefa concluída
+- `- [~]` tarefa pulada pelo loop e pendente de revisão manual
+
 O funcionamento é:
 
 1.  O loop lê o PRD
@@ -49,6 +55,7 @@ O funcionamento é:
 4.  Se passar nos critérios (build/test)
     
 5.  Marca como concluída (`[x]`)
+    ou, se a política de `no changes` for ignorada, marca como revisão manual (`[~]`)
     
 6.  Encerra o processo
     

@@ -34,7 +34,7 @@ public class ParallelCommandTests
         try
         {
             var prd = Path.Combine(dir, "PRD.md");
-            File.WriteAllText(prd, "- [x] done");
+            File.WriteAllText(prd, "- [x] done\n- [~] manual review");
             var cmd = BuildCommand(dir);
             var exit = await cmd.ExecuteAsync(dir, prd, null, "fake", null, null, null, null, false, false, false, null, StringCatalog.Default());
             Assert.Equal(0, exit);

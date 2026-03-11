@@ -20,6 +20,7 @@ Use este arquivo como exemplo para testar `run` e `parallel`.
 ## Fase 2
 
 - [ ] Criar testes unitários da camada de serviço [parallel_group:tests] [depends_on:backend]
+- [~] Revisar manualmente a cobertura legada antes de remover fixtures antigas
 - [ ] Criar testes de integração da API [parallel_group:tests] [depends_on:backend]
 - [ ] Ajustar documentação do endpoint [parallel_group:docs] [depends_on:backend]
 
@@ -27,4 +28,3 @@ Use este arquivo como exemplo para testar `run` e `parallel`.
 
 - [ ] Validar fluxo E2E no navegador [parallel_group:e2e] [depends_on:tests]
 - [ ] Gerar changelog da entrega [parallel_group:release] [depends_on:e2e]
-

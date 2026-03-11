@@ -223,7 +223,7 @@ public sealed class ParallelCommand
                         {
                             var latest = PrdParser.Parse(prdPath);
                             var idx = task.Index.Value;
-                            if (idx >= 0 && idx < latest.TaskEntries.Count && !latest.TaskEntries[idx].IsCompleted)
+                            if (idx >= 0 && idx < latest.TaskEntries.Count && latest.TaskEntries[idx].IsPending)
                                 PrdWriter.MarkTaskCompleted(prdPath, latest, idx);
                         }
                     }
@@ -358,7 +358,7 @@ public sealed class ParallelCommand
         var doc = PrdParser.Parse(prdPath);
         return doc.TaskEntries
             .Select((t, i) => new { Task = t, Index = i })
-            .Where(x => !x.Task.IsCompleted)
+            .Where(x => x.Task.IsPending)
             .Select(x =>
             {
                 var parsed = ParseTaskAnnotations(x.Task.DisplayText);
@@ -439,8 +439,8 @@ public sealed class ParallelCommand
         if (commitExit == 0)
             return true;
         // If there are no changes to commit, still consider success.
-        var status = RunGit(worktreeDirectory, "status --porcelain", 5000);
-        return status == 0;
+        var status = TryReadGitOutput(worktreeDirectory, "status --porcelain", 5000);
+        return status.ExitCode == 0 && string.IsNullOrWhiteSpace(status.Stdout);
     }
 
     private static bool MergeBranch(string rootWorkingDirectory, string branchName)
@@ -464,27 +464,8 @@ public sealed class ParallelCommand
 
     private static string? GetCurrentBranch(string workingDirectory)
     {
-        try
-        {
-            using var proc = Process.Start(new ProcessStartInfo
-            {
-                FileName = "git",
-                Arguments = "rev-parse --abbrev-ref HEAD",
-                WorkingDirectory = workingDirectory,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            });
-            if (proc == null)
-                return null;
-            proc.WaitForExit(5000);
-            return proc.ExitCode == 0 ? proc.StandardOutput.ReadToEnd().Trim() : null;
-        }
-        catch
-        {
-            return null;
-        }
+        var result = TryReadGitOutput(workingDirectory, "rev-parse --abbrev-ref HEAD", 5000);
+        return result.ExitCode == 0 ? result.Stdout.Trim() : null;
     }
 
     private static int RunGh(string workingDirectory, string args, int timeoutMs)
@@ -540,6 +521,31 @@ public sealed class ParallelCommand
         catch
         {
             return 1;
+        }
+    }
+
+    private static (int ExitCode, string Stdout) TryReadGitOutput(string workingDirectory, string args, int timeoutMs)
+    {
+        try
+        {
+            using var proc = Process.Start(new ProcessStartInfo
+            {
+                FileName = "git",
+                Arguments = args,
+                WorkingDirectory = workingDirectory,
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            });
+            if (proc == null)
+                return (1, string.Empty);
+            proc.WaitForExit(timeoutMs);
+            return proc.HasExited ? (proc.ExitCode, proc.StandardOutput.ReadToEnd()) : (1, string.Empty);
+        }
+        catch
+        {
+            return (1, string.Empty);
         }
     }
 

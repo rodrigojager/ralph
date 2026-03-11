@@ -41,6 +41,18 @@ public class PrdParserTests
     }
 
     [Fact]
+    public void Skipped_for_review_tasks_are_not_pending()
+    {
+        var content = @"- [~] Needs manual review
+- [ ] Next task";
+        var doc = PrdParser.ParseContent(content);
+        Assert.Equal(2, doc.TaskEntries.Count);
+        Assert.True(doc.TaskEntries[0].IsSkippedForReview);
+        Assert.False(doc.TaskEntries[0].IsCompleted);
+        Assert.Equal(1, doc.GetNextPendingTaskIndex());
+    }
+
+    [Fact]
     public void Parses_frontmatter()
     {
         var content = @"---
@@ -167,6 +179,30 @@ tasks:
             Assert.False(doc.TaskEntries[0].IsCompleted);
             Assert.Equal("Second", doc.TaskEntries[1].DisplayText);
             Assert.True(doc.TaskEntries[1].IsCompleted);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Parses_json_skipped_for_review_status()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "RalphTests_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var path = Path.Combine(dir, "tasks.json");
+            File.WriteAllText(path, """
+[
+  { "text": "First", "status": "skipped_for_review" },
+  { "task": "Second", "completed": false }
+]
+""");
+            var doc = PrdParser.Parse(path);
+            Assert.True(doc.TaskEntries[0].IsSkippedForReview);
+            Assert.Equal(1, doc.GetNextPendingTaskIndex());
         }
         finally
         {

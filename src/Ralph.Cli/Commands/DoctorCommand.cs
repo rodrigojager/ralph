@@ -26,6 +26,7 @@ public sealed class DoctorCommand
         Console.WriteLine(s.Get("doctor.header"));
         Console.WriteLine(s.Get("doctor.separator"));
         var ok = true;
+        var anyAvailableEngine = false;
 
         if (_workspaceInit.IsInitialized(workingDirectory))
             Console.WriteLine(s.Get("doctor.workspace_ok"));
@@ -48,7 +49,7 @@ public sealed class DoctorCommand
         var config = File.Exists(configPath) ? _configStore.Load(configPath) : RalphConfig.Default;
         var known = GetKnownEngineNames();
         foreach (var name in known)
-            CheckEngineCommand(name, config, s, nonInteractive);
+            anyAvailableEngine |= CheckEngineCommand(name, config, s, nonInteractive);
 
         if (config.Engines != null)
         {
@@ -56,9 +57,12 @@ public sealed class DoctorCommand
             {
                 if (known.Contains(alias, StringComparer.OrdinalIgnoreCase))
                     continue;
-                CheckEngineCommand(alias, config, s, nonInteractive);
+                anyAvailableEngine |= CheckEngineCommand(alias, config, s, nonInteractive);
             }
         }
+
+        if (!anyAvailableEngine)
+            ok = false;
 
         try
         {
@@ -177,7 +181,7 @@ public sealed class DoctorCommand
         return ["cursor", "codex", "claude", "opencode", "qwen", "droid", "copilot", "gemini"];
     }
 
-    private void CheckEngineCommand(string displayName, RalphConfig config, IStringCatalog s, bool nonInteractive)
+    private bool CheckEngineCommand(string displayName, RalphConfig config, IStringCatalog s, bool nonInteractive)
     {
         var probe = _commandResolver.Probe(displayName, config);
         if (probe.Resolved != null && probe.AuthRequired)
@@ -192,17 +196,18 @@ public sealed class DoctorCommand
                 if (answer is "y" or "yes" or "s" or "sim")
                     TryOpenAuthDocs(displayName);
             }
-            return;
+            return false;
         }
         if (probe.Available && probe.Resolved != null)
         {
             var details = $"{displayName} ({probe.Resolved.Display()})";
             Console.WriteLine(s.Format("doctor.engine_ok", details));
-            return;
+            return true;
         }
 
         var attempted = string.Join(", ", probe.TriedCandidates.Select(c => c.Display()));
         Console.WriteLine(s.Format("doctor.engine_missing", displayName, attempted));
+        return false;
     }
 
     private static void TryOpenAuthDocs(string engineName)

@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
+using Ralph.Cli.Infrastructure;
 using Ralph.Core.Config;
 using Ralph.Core.Localization;
 
@@ -42,7 +43,7 @@ public sealed class UpdateCommand
             var current = NormalizeVersionToken(currentVersion);
             Console.WriteLine(s.Format("update.latest", latest));
 
-            var exePath = Environment.ProcessPath;
+            var exePath = CurrentExecutableLocator.Resolve();
             if (string.IsNullOrWhiteSpace(exePath))
             {
                 Console.Error.WriteLine(s.Format("update.fail", s.Get("update.no_exe_path")));

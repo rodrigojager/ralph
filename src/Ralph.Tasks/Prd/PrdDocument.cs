@@ -10,7 +10,7 @@ public sealed class PrdDocument
     {
         for (var i = 0; i < TaskEntries.Count; i++)
         {
-            if (!TaskEntries[i].IsCompleted)
+            if (TaskEntries[i].IsPending)
                 return i;
         }
         return null;

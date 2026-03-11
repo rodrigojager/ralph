@@ -130,10 +130,12 @@ public sealed class RunLoopService
 
             var doc = PrdParser.Parse(prdPath);
             var totalTasks = doc.TaskEntries.Count;
-            var completedTasks = doc.TaskEntries.Count(t => t.IsCompleted);
+            var completedTasks = doc.TaskEntries.Count(t => t.IsResolved);
             var nextIndex = doc.GetNextPendingTaskIndex();
             if (nextIndex == null)
             {
+                if (doc.TaskEntries.Any(t => t.IsSkippedForReview))
+                    _ui.WriteWarn(_s.Get("run.manual_review_remaining"));
                 _ui.WriteInfo(_s.Get("run.all_done"));
                 _ui.WriteInfo(_s.Format("run.summary_complete", totalTasks, totalTasks, iteration));
                 _terminalView?.SetStatus(_s.Get("run.status_all_tasks_completed"));
@@ -513,14 +515,36 @@ public sealed class RunLoopService
                     _ui.WriteWarn(_s.Get("run.gutter_ignored"));
                     _gutterDetector.Reset();
                 }
-                reportEntries.Add(BuildReportEntry(taskEntry.DisplayText, activeEngineName, taskStartedAt, DateTimeOffset.UtcNow, result?.ExitCode ?? -1, attempt, taskInputTokens, taskOutputTokens, "no_changes"));
                 if (noChangeAction == NoChangeAction.FailFast)
                 {
+                    reportEntries.Add(BuildReportEntry(taskEntry.DisplayText, activeEngineName, taskStartedAt, DateTimeOffset.UtcNow, result?.ExitCode ?? -1, attempt, taskInputTokens, taskOutputTokens, "no_changes"));
                     if (noChangePolicy == NoChangePolicy.Retry && noChangeStopOnMaxAttempts)
                         _ui.WriteWarn(_s.Format("run.no_change_max_retries_stop", noChangeMaxAttempts));
                     _ui.WriteWarn(_s.Get("run.no_change_fail_fast"));
                     WriteRunReport(workingDirectory, runStartedAt, false, reportEntries);
                     return new RunLoopResult { Completed = false };
+                }
+                if (noChangeAction == NoChangeAction.Continue && !noChangeStopOnMaxAttempts)
+                {
+                    PrdWriter.MarkTaskSkippedForReview(prdPath, doc, nextIndex.Value);
+                    var skippedState = _stateStore.Load(statePath);
+                    skippedState.Iteration = iteration + 1;
+                    skippedState.LastTaskIndex = nextIndex.Value;
+                    skippedState.LastTaskText = taskEntry.DisplayText;
+                    _stateStore.Save(statePath, skippedState);
+
+                    AppendToFile(progressPath, $"- [{DateTime.UtcNow:O}] SKIPPED_FOR_REVIEW: {taskEntry.DisplayText}\n");
+                    AppendToFile(activityPath, $"[{DateTime.UtcNow:O}] Skipped task {nextIndex.Value + 1} for manual review: {taskEntry.DisplayText}\n");
+                    _ui.WriteWarn(_s.Get("run.no_change_marked_for_review"));
+                    _gutterDetector.RecordAttempt(nextIndex.Value, true);
+                    anyTaskCompletedInRun = true;
+                    _terminalView?.SetStatus(_s.Format("run.status_skipped_task_review", nextIndex.Value + 1, totalTasks));
+                    _terminalView?.SetProgress(completedTasks + 1, totalTasks, taskEntry.DisplayText);
+                    reportEntries.Add(BuildReportEntry(taskEntry.DisplayText, activeEngineName, taskStartedAt, DateTimeOffset.UtcNow, result?.ExitCode ?? -1, attempt, taskInputTokens, taskOutputTokens, "skipped_for_review"));
+                }
+                else
+                {
+                    reportEntries.Add(BuildReportEntry(taskEntry.DisplayText, activeEngineName, taskStartedAt, DateTimeOffset.UtcNow, result?.ExitCode ?? -1, attempt, taskInputTokens, taskOutputTokens, "no_changes"));
                 }
                 iteration++;
                 continue;
@@ -733,7 +757,7 @@ public sealed class RunLoopService
 
         Console.WriteLine();
 
-        var pending = doc.TaskEntries.Where(t => !t.IsCompleted).ToList();
+        var pending = doc.TaskEntries.Where(t => t.IsPending).ToList();
         var completed = doc.TaskEntries.Count - pending.Count;
         Console.WriteLine($"Tasks: {completed}/{doc.TaskEntries.Count} completed, {pending.Count} pending");
 
@@ -755,6 +779,53 @@ public sealed class RunLoopService
                 Console.WriteLine($"  ... and {pending.Count - maxIterations.Value} more (limited by --max-iterations {maxIterations.Value})");
         }
 
+        Console.WriteLine();
+        Console.WriteLine(_s.Get("run.dry_run_no_files"));
+        return Task.FromResult(new RunLoopResult { Completed = true });
+    }
+
+    public Task<RunLoopResult> DryRunSingleTaskAsync(
+        string workingDirectory,
+        string taskText,
+        string? engineName = null,
+        string? modelOverride = null,
+        int? maxTokensOverride = null,
+        double? temperatureOverride = null,
+        IReadOnlyList<string>? extraArgsPassthrough = null)
+    {
+        Console.WriteLine("ralph dry-run (single task)");
+        Console.WriteLine(new string('=', 40));
+
+        var isInitialized = _workspaceInit.IsInitialized(workingDirectory);
+        Console.WriteLine($"  Workspace:  {(isInitialized ? ".ralph/ initialized" : ".ralph/ NOT initialized (run 'ralph init')")}");
+
+        var configPath = _workspaceInit.GetConfigPath(workingDirectory);
+        var config = File.Exists(configPath) ? new ConfigStore().Load(configPath) : RalphConfig.Default;
+
+        var engineNameToUse = engineName ?? "cursor";
+        var engineConfig = config.Engines?.TryGetValue(engineNameToUse, out var ec) == true ? ec : null;
+        var modelToUse = modelOverride ?? engineConfig?.DefaultModel;
+        var resolvedCommand = _commandResolver.ResolveForExecution(engineNameToUse, config);
+        var command = resolvedCommand.Display();
+
+        Console.WriteLine($"  Engine:     {engineNameToUse} ({command})");
+        Console.WriteLine($"  Model:      {(modelToUse ?? "(default)")}");
+        if (maxTokensOverride.HasValue || engineConfig?.MaxTokens != null)
+            Console.WriteLine($"  Max tokens: {maxTokensOverride ?? engineConfig?.MaxTokens}");
+        if (temperatureOverride.HasValue || engineConfig?.Temperature != null)
+            Console.WriteLine($"  Temp:       {temperatureOverride ?? engineConfig?.Temperature}");
+
+        var guardrailsPath = _workspaceInit.GetGuardrailsPath(workingDirectory);
+        var hasGuardrails = File.Exists(guardrailsPath);
+        Console.WriteLine($"  Guardrails: {(hasGuardrails ? $"yes ({Path.GetRelativePath(workingDirectory, guardrailsPath)})" : "none")}");
+        if (extraArgsPassthrough is { Count: > 0 })
+            Console.WriteLine($"  Extra args: {string.Join(" ", extraArgsPassthrough)}");
+
+        Console.WriteLine();
+        Console.WriteLine("Task: 1 pending");
+        Console.WriteLine();
+        Console.WriteLine($"  1. [ ] {taskText}");
+        Console.WriteLine($"       Would run: {command}{(modelToUse != null ? $" --model {modelToUse}" : "")} \"<prompt>\"");
         Console.WriteLine();
         Console.WriteLine(_s.Get("run.dry_run_no_files"));
         return Task.FromResult(new RunLoopResult { Completed = true });
@@ -1378,7 +1449,7 @@ public sealed class RunLoopService
         if (currentEngineIndex < totalEngines - 1)
             return NoChangeAction.Fallback;
 
-        return NoChangeAction.Continue;
+        return stopOnMaxAttempts ? NoChangeAction.FailFast : NoChangeAction.Continue;
     }
 }
 

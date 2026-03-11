@@ -303,7 +303,7 @@ public class InitAndRunIntegrationTests
     }
 
     [Fact]
-    public async Task Run_no_change_retry_can_continue_after_max_retries_when_disabled()
+    public async Task Run_no_change_retry_marks_task_for_manual_review_when_continue_is_enabled()
     {
         var dir = Path.Combine(Path.GetTempPath(), "RalphIntegration_" + Guid.NewGuid().ToString("N"));
         try
@@ -332,10 +332,98 @@ public class InitAndRunIntegrationTests
                 noChangeMaxAttemptsOverride: 2,
                 noChangeStopOnMaxAttemptsOverride: false);
 
-            Assert.False(result.Completed);
-            Assert.Equal(6, calls);
+            Assert.True(result.Completed);
+            Assert.Equal(2, calls);
             var doc = PrdParser.Parse(prdPath);
-            Assert.False(doc.TaskEntries[0].IsCompleted);
+            Assert.True(doc.TaskEntries[0].IsSkippedForReview);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task Run_no_change_retry_moves_to_next_task_after_marking_manual_review()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "RalphIntegration_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            var prdPath = Path.Combine(dir, "PRD.md");
+            File.WriteAllText(prdPath, @"- [ ] First
+- [ ] Second");
+            var init = new WorkspaceInitializer();
+            init.Initialize(dir);
+            var registry = new EngineRegistry();
+            var calls = 0;
+            registry.Register(new FakeEngine("fake", (req, _) =>
+            {
+                calls++;
+                if (calls == 3)
+                    File.WriteAllText(Path.Combine(req.WorkingDirectory, "changed.txt"), "ok");
+                return Task.FromResult(new EngineResult { ExitCode = 0, CompletionSignal = CompletionSignal.Complete });
+            }));
+            var runLoop = new RunLoopService(registry, new StateStore(), init, new ConsoleInteraction());
+
+            var result = await runLoop.RunAsync(
+                dir,
+                prdPath,
+                maxIterations: 3,
+                skipTests: true,
+                engineName: "fake",
+                noChangePolicyOverride: "retry",
+                noChangeMaxAttemptsOverride: 2,
+                noChangeStopOnMaxAttemptsOverride: false);
+
+            Assert.True(result.Completed);
+            Assert.Equal(3, calls);
+            var doc = PrdParser.Parse(prdPath);
+            Assert.True(doc.TaskEntries[0].IsSkippedForReview);
+            Assert.True(doc.TaskEntries[1].IsCompleted);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task Run_no_change_fallback_moves_to_next_task_after_marking_manual_review_when_continue_is_enabled()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "RalphIntegration_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            var prdPath = Path.Combine(dir, "PRD.md");
+            File.WriteAllText(prdPath, @"- [ ] First
+- [ ] Second");
+            var init = new WorkspaceInitializer();
+            init.Initialize(dir);
+            var registry = new EngineRegistry();
+            var calls = 0;
+            registry.Register(new FakeEngine("fake", (req, _) =>
+            {
+                calls++;
+                if (calls == 2)
+                    File.WriteAllText(Path.Combine(req.WorkingDirectory, "changed.txt"), "ok");
+                return Task.FromResult(new EngineResult { ExitCode = 0, CompletionSignal = CompletionSignal.Complete });
+            }));
+            var runLoop = new RunLoopService(registry, new StateStore(), init, new ConsoleInteraction());
+
+            var result = await runLoop.RunAsync(
+                dir,
+                prdPath,
+                maxIterations: 3,
+                skipTests: true,
+                engineName: "fake",
+                noChangeStopOnMaxAttemptsOverride: false);
+
+            Assert.True(result.Completed);
+            Assert.Equal(2, calls);
+            var doc = PrdParser.Parse(prdPath);
+            Assert.True(doc.TaskEntries[0].IsSkippedForReview);
+            Assert.True(doc.TaskEntries[1].IsCompleted);
         }
         finally
         {

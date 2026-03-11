@@ -88,7 +88,7 @@ public sealed class RulesCommand
         if (!force)
         {
             Console.WriteLine(s.Get("rules.force_required"));
-            return 0;
+            return 1;
         }
 
         File.WriteAllText(guardrailsPath, "# Guardrails\n\nAdd constraints and rules here.\n");

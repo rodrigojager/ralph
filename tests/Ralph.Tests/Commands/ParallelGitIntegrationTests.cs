@@ -104,6 +104,14 @@ public class ParallelGitIntegrationTests
             if (File.Exists(common))
                 return common;
         }
+        else
+        {
+            foreach (var candidate in new[] { "/usr/bin/git", "/usr/local/bin/git", "/bin/git" })
+            {
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+        }
 
         return "git";
     }

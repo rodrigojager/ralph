@@ -4,6 +4,7 @@ using System.Text;
 using Terminal.Gui;
 using Ralph.Core.Localization;
 using Ralph.Engines.Tokens;
+using Ralph.Persistence.Workspace;
 
 namespace Ralph.UI.Tui;
 
@@ -83,11 +84,20 @@ public sealed class TuiDashboard : IDisposable
     {
         try
         {
-            var logPath = Path.Combine(Path.GetTempPath(), "ralph-tui-debug.log");
+            var logPath = GetDebugLogPath();
             var line = $"[{DateTime.Now:HH:mm:ss.fff}] {message}{Environment.NewLine}";
             File.AppendAllText(logPath, line);
         }
         catch { /* never crash on logging */ }
+    }
+
+    private static string GetDebugLogPath()
+    {
+        var workspace = new WorkspaceInitializer();
+        var workingDirectory = Directory.GetCurrentDirectory();
+        var logPath = workspace.GetTuiDebugLogPath(workingDirectory);
+        Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
+        return logPath;
     }
 
     private void RunUi()
@@ -384,6 +394,7 @@ public sealed class TuiDashboard : IDisposable
         catch (Exception ex)
         {
             WriteDebugLog($"RunUi() outer catch: {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}");
+            AppendExecutionLog("ui_failed", $"type={ex.GetType().Name} | message={SanitizeForLog(ex.Message)}");
             _fallbackRequested = true;
             _healthy = false;
             _lastErrorMessage = ex.Message;
@@ -613,5 +624,25 @@ public sealed class TuiDashboard : IDisposable
         var path = Path.Combine(dir, "tui-copy.txt");
         File.WriteAllText(path, text, Encoding.UTF8);
         return path;
+    }
+
+    private static void AppendExecutionLog(string eventName, string details)
+    {
+        try
+        {
+            var workspace = new WorkspaceInitializer();
+            var path = workspace.GetExecutionLogPath(Directory.GetCurrentDirectory());
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.AppendAllText(path, $"[{DateTime.UtcNow:O}] event={eventName} | reason=tui_exception | details={details}{Environment.NewLine}");
+        }
+        catch
+        {
+            // Logging must never break TUI fallback.
+        }
+    }
+
+    private static string SanitizeForLog(string value)
+    {
+        return value.Replace('\r', ' ').Replace('\n', ' ').Trim();
     }
 }

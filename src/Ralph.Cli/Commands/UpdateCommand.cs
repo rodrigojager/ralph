@@ -166,7 +166,7 @@ public sealed class UpdateCommand
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine(s.Format("update.lang_sync_fail", ex.Message));
+            Console.WriteLine(s.Format("update.lang_sync_warn", ex.Message));
         }
         finally
         {

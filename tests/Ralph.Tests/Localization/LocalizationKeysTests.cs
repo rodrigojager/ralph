@@ -21,6 +21,7 @@ public class LocalizationKeysTests
             "tasks.sync.invalid_state",
             "tasks.sync.output_exists",
             "run.status_engine_attempt_exit",
+            "update.lang_sync_warn",
             "run.no_change_fail_fast",
             "run.no_change_marked_for_review",
             "run.manual_review_remaining",

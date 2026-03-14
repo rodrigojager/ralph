@@ -443,7 +443,7 @@ try
             {
                 // TUI failed mid-run; fall through and await the command task normally.
                 Console.Error.WriteLine(s.Format("ui.tui_runtime_error", tuiEx.Message));
-                Console.Error.WriteLine(s.Format("ui.tui_debug_log", Path.Combine(Path.GetTempPath(), "ralph-tui-debug.log")));
+                Console.Error.WriteLine(s.Format("ui.tui_debug_log", workspaceInit.GetTuiDebugLogPath(cwd)));
             }
             return await cmdTask;
         }
@@ -460,11 +460,13 @@ try
 }
 catch (OperationCanceledException)
 {
+    TryAppendExecutionLog(workspaceInit, cwd, command, "process_canceled", "ctrl_c");
     Console.Error.WriteLine(s.Get("run.operation_canceled"));
     return 130;
 }
 catch (Exception ex)
 {
+    TryAppendExecutionLog(workspaceInit, cwd, command, "process_failed", "unhandled_exception", ex.Message);
     Console.Error.WriteLine(s.Format("error.unhandled", ex.Message));
     return 1;
 }
@@ -497,3 +499,33 @@ static void PrintHelp(IStringCatalog s)
     Console.WriteLine(s.Get("help.header"));
     Console.WriteLine(s.Get("help.full"));
 }
+
+static void TryAppendExecutionLog(WorkspaceInitializer workspaceInit, string cwd, string? command, string eventName, string reason, string? details = null)
+{
+    if (command is not ("run" or "once" or "parallel"))
+        return;
+
+    try
+    {
+        var path = workspaceInit.GetExecutionLogPath(cwd);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var parts = new List<string>
+        {
+            $"event={eventName}",
+            $"reason={reason}",
+            $"command={command}"
+        };
+
+        if (!string.IsNullOrWhiteSpace(details))
+            parts.Add($"details={SanitizeLogValue(details)}");
+
+        File.AppendAllText(path, $"[{DateTime.UtcNow:O}] {string.Join(" | ", parts)}{Environment.NewLine}");
+    }
+    catch
+    {
+        // Do not mask the original exception/cancellation.
+    }
+}
+
+static string SanitizeLogValue(string value) =>
+    value.Replace('\r', ' ').Replace('\n', ' ').Trim();

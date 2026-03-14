@@ -119,6 +119,12 @@ public sealed class RunLoopService
         var progressPath = _workspaceInit.GetProgressPath(workingDirectory);
         var activityPath = _workspaceInit.GetActivityLogPath(workingDirectory);
         var errorsPath = _workspaceInit.GetErrorsLogPath(workingDirectory);
+        var executionPath = _workspaceInit.GetExecutionLogPath(workingDirectory);
+        AppendExecutionEvent(
+            executionPath,
+            "run_started",
+            "begin",
+            details: $"prd={SanitizeLogValue(Path.GetRelativePath(workingDirectory, prdPath))}");
 
         var iteration = 0;
         var anyTaskCompletedInRun = false;
@@ -141,6 +147,11 @@ public sealed class RunLoopService
                 _terminalView?.SetStatus(_s.Get("run.status_all_tasks_completed"));
                 _terminalView?.SetProgress(totalTasks, totalTasks);
                 WriteSessionTokensSummary(sessionInputTokens, sessionOutputTokens);
+                AppendExecutionEvent(
+                    executionPath,
+                    "run_finished",
+                    "all_tasks_completed",
+                    details: $"iterations={iteration}");
                 var done = new RunLoopResult { Completed = true };
                 WriteRunReport(workingDirectory, runStartedAt, done.Completed, reportEntries);
                 return done;
@@ -148,6 +159,14 @@ public sealed class RunLoopService
 
             var taskEntry = doc.TaskEntries[nextIndex.Value];
             var taskSnapshot = CaptureTaskSnapshot(workingDirectory, autoRollback);
+            AppendExecutionEvent(
+                executionPath,
+                "task_started",
+                "iteration",
+                task: taskEntry.DisplayText,
+                taskIndex: nextIndex.Value + 1,
+                totalTasks: totalTasks,
+                details: $"iteration={iteration + 1}");
 
             // Branch per task: create a dedicated branch before running the engine
             string? taskBranch = null;
@@ -182,6 +201,14 @@ public sealed class RunLoopService
                 _ui.WriteError(_s.Format("run.engine_not_found", activeEngineName, string.Join(", ", _engineRegistry.GetRegisteredNames())));
                 _ui.WriteInfo(_s.Format("run.summary_partial", completedTasks, totalTasks));
                 _terminalView?.SetStatus(_s.Format("run.status_engine_not_found", activeEngineName));
+                AppendExecutionEvent(
+                    executionPath,
+                    "run_stopped",
+                    "engine_not_found",
+                    task: taskEntry.DisplayText,
+                    engine: activeEngineName,
+                    taskIndex: nextIndex.Value + 1,
+                    totalTasks: totalTasks);
                 return new RunLoopResult { Completed = false, Gutter = true };
             }
 
@@ -345,6 +372,17 @@ public sealed class RunLoopService
                 _ui.WriteWarn(_s.Format("run.engine_failed_with_log", activeEngineName, result.ExitCode));
                 var taskShort = taskEntry.DisplayText.Length > 45 ? taskEntry.DisplayText[..45] + "…" : taskEntry.DisplayText;
                 _ui.WriteError(_s.Format("run.engine_failed_task", activeEngineName, nextIndex.Value + 1, totalTasks, taskShort, result.ExitCode));
+                AppendExecutionEvent(
+                    executionPath,
+                    "engine_attempt_failed",
+                    "engine_exit_non_zero",
+                    task: taskEntry.DisplayText,
+                    engine: activeEngineName,
+                    taskIndex: nextIndex.Value + 1,
+                    totalTasks: totalTasks,
+                    attempt: attempt + 1,
+                    exitCode: result.ExitCode,
+                    details: $"errors={SanitizeLogValue(Path.GetRelativePath(workingDirectory, errorsPath))}");
                 // Always show the meaningful error lines (filtered: no metadata noise)
                 var rawOutput = !string.IsNullOrWhiteSpace(result.Stderr) ? result.Stderr : result.Stdout;
                 if (!string.IsNullOrWhiteSpace(rawOutput))
@@ -368,6 +406,16 @@ public sealed class RunLoopService
                     _ui.WriteInfo(_s.Format("run.summary_partial", completedTasks, totalTasks));
                     _terminalView?.SetStatus(_s.Get("run.status_gutter"));
                     WriteSessionTokensSummary(sessionInputTokens, sessionOutputTokens);
+                    AppendExecutionEvent(
+                        executionPath,
+                        "run_stopped",
+                        "gutter",
+                        task: taskEntry.DisplayText,
+                        engine: activeEngineName,
+                        taskIndex: nextIndex.Value + 1,
+                        totalTasks: totalTasks,
+                        attempt: attempt + 1,
+                        exitCode: result?.ExitCode);
                     var gutterResult = new RunLoopResult { Completed = false, Gutter = true };
                     AttemptRollbackIfEnabled(workingDirectory, taskSnapshot, taskEntry.DisplayText, "gutter", errorsPath);
                     reportEntries.Add(BuildReportEntry(taskEntry.DisplayText, activeEngineName, taskStartedAt, DateTimeOffset.UtcNow, result?.ExitCode ?? -1, attempt, taskInputTokens, taskOutputTokens, "gutter"));
@@ -411,6 +459,15 @@ public sealed class RunLoopService
                     {
                         _ui.WriteWarn(_s.Get("run.context_signal_defer"));
                         WriteSessionTokensSummary(sessionInputTokens, sessionOutputTokens);
+                        AppendExecutionEvent(
+                            executionPath,
+                            "run_stopped",
+                            "context_defer",
+                            task: taskEntry.DisplayText,
+                            engine: activeEngineName,
+                            taskIndex: nextIndex.Value + 1,
+                            totalTasks: totalTasks,
+                            exitCode: result?.ExitCode);
                         var deferred = new RunLoopResult { Completed = false };
                         WriteRunReport(workingDirectory, runStartedAt, deferred.Completed, reportEntries);
                         return deferred;
@@ -426,6 +483,15 @@ public sealed class RunLoopService
                     {
                         _ui.WriteWarn(_s.Get("run.context_signal_gutter"));
                         WriteSessionTokensSummary(sessionInputTokens, sessionOutputTokens);
+                        AppendExecutionEvent(
+                            executionPath,
+                            "run_stopped",
+                            "context_gutter",
+                            task: taskEntry.DisplayText,
+                            engine: activeEngineName,
+                            taskIndex: nextIndex.Value + 1,
+                            totalTasks: totalTasks,
+                            exitCode: result?.ExitCode);
                         var gutter = new RunLoopResult { Completed = false, Gutter = true };
                         WriteRunReport(workingDirectory, runStartedAt, gutter.Completed, reportEntries);
                         return gutter;
@@ -439,6 +505,17 @@ public sealed class RunLoopService
                 _ui.WriteInfo(_s.Format("run.summary_partial", completedTasks, totalTasks));
                 _terminalView?.SetStatus(_s.Format("run.status_stopped_exit_code", result?.ExitCode ?? -1));
                 WriteSessionTokensSummary(sessionInputTokens, sessionOutputTokens);
+                AppendExecutionEvent(
+                    executionPath,
+                    "run_stopped",
+                    "engine_failed",
+                    task: taskEntry.DisplayText,
+                    engine: activeEngineName,
+                    taskIndex: nextIndex.Value + 1,
+                    totalTasks: totalTasks,
+                    attempt: attempt + 1,
+                    exitCode: result?.ExitCode,
+                    details: $"errors={SanitizeLogValue(Path.GetRelativePath(workingDirectory, errorsPath))}");
                 var failed = new RunLoopResult { Completed = false };
                 AttemptRollbackIfEnabled(workingDirectory, taskSnapshot, taskEntry.DisplayText, "engine_failed", errorsPath);
                 reportEntries.Add(BuildReportEntry(taskEntry.DisplayText, activeEngineName, taskStartedAt, DateTimeOffset.UtcNow, result?.ExitCode ?? -1, attempt, taskInputTokens, taskOutputTokens, "failed"));
@@ -521,6 +598,17 @@ public sealed class RunLoopService
                     if (noChangePolicy == NoChangePolicy.Retry && noChangeStopOnMaxAttempts)
                         _ui.WriteWarn(_s.Format("run.no_change_max_retries_stop", noChangeMaxAttempts));
                     _ui.WriteWarn(_s.Get("run.no_change_fail_fast"));
+                    AppendExecutionEvent(
+                        executionPath,
+                        "run_stopped",
+                        "no_changes_fail_fast",
+                        task: taskEntry.DisplayText,
+                        engine: activeEngineName,
+                        taskIndex: nextIndex.Value + 1,
+                        totalTasks: totalTasks,
+                        attempt: attempt + 1,
+                        exitCode: result?.ExitCode,
+                        details: $"policy={noChangePolicy}");
                     WriteRunReport(workingDirectory, runStartedAt, false, reportEntries);
                     return new RunLoopResult { Completed = false };
                 }
@@ -535,6 +623,16 @@ public sealed class RunLoopService
 
                     AppendToFile(progressPath, $"- [{DateTime.UtcNow:O}] SKIPPED_FOR_REVIEW: {taskEntry.DisplayText}\n");
                     AppendToFile(activityPath, $"[{DateTime.UtcNow:O}] Skipped task {nextIndex.Value + 1} for manual review: {taskEntry.DisplayText}\n");
+                    AppendExecutionEvent(
+                        executionPath,
+                        "task_blocked",
+                        "skipped_for_review",
+                        task: taskEntry.DisplayText,
+                        engine: activeEngineName,
+                        taskIndex: nextIndex.Value + 1,
+                        totalTasks: totalTasks,
+                        exitCode: result?.ExitCode,
+                        details: $"policy={noChangePolicy}");
                     _ui.WriteWarn(_s.Get("run.no_change_marked_for_review"));
                     _gutterDetector.RecordAttempt(nextIndex.Value, true);
                     anyTaskCompletedInRun = true;
@@ -565,6 +663,15 @@ public sealed class RunLoopService
                     {
                         _ui.WriteInfo(_s.Format("run.summary_partial", completedTasks, totalTasks));
                         WriteSessionTokensSummary(sessionInputTokens, sessionOutputTokens);
+                        AppendExecutionEvent(
+                            executionPath,
+                            "run_stopped",
+                            "lint_failed_gutter",
+                            task: taskEntry.DisplayText,
+                            engine: activeEngineName,
+                            taskIndex: nextIndex.Value + 1,
+                            totalTasks: totalTasks,
+                            exitCode: result?.ExitCode);
                         var lintGutter = new RunLoopResult { Completed = false, Gutter = true };
                         AttemptRollbackIfEnabled(workingDirectory, taskSnapshot, taskEntry.DisplayText, "lint_failed_gutter", errorsPath);
                         reportEntries.Add(BuildReportEntry(taskEntry.DisplayText, activeEngineName, taskStartedAt, DateTimeOffset.UtcNow, result?.ExitCode ?? -1, attempt, taskInputTokens, taskOutputTokens, "gutter"));
@@ -578,6 +685,15 @@ public sealed class RunLoopService
                         _gutterDetector.Reset();
                     }
                     AttemptRollbackIfEnabled(workingDirectory, taskSnapshot, taskEntry.DisplayText, "lint_failed", errorsPath);
+                    AppendExecutionEvent(
+                        executionPath,
+                        "task_blocked",
+                        "lint_failed",
+                        task: taskEntry.DisplayText,
+                        engine: activeEngineName,
+                        taskIndex: nextIndex.Value + 1,
+                        totalTasks: totalTasks,
+                        exitCode: result?.ExitCode);
                     reportEntries.Add(BuildReportEntry(taskEntry.DisplayText, activeEngineName, taskStartedAt, DateTimeOffset.UtcNow, result?.ExitCode ?? -1, attempt, taskInputTokens, taskOutputTokens, "lint_failed"));
                     iteration++;
                     continue;
@@ -597,6 +713,15 @@ public sealed class RunLoopService
                     {
                         _ui.WriteInfo(_s.Format("run.summary_partial", completedTasks, totalTasks));
                         WriteSessionTokensSummary(sessionInputTokens, sessionOutputTokens);
+                        AppendExecutionEvent(
+                            executionPath,
+                            "run_stopped",
+                            "tests_failed_gutter",
+                            task: taskEntry.DisplayText,
+                            engine: activeEngineName,
+                            taskIndex: nextIndex.Value + 1,
+                            totalTasks: totalTasks,
+                            exitCode: result?.ExitCode);
                         var testGutter = new RunLoopResult { Completed = false, Gutter = true };
                         AttemptRollbackIfEnabled(workingDirectory, taskSnapshot, taskEntry.DisplayText, "tests_failed_gutter", errorsPath);
                         reportEntries.Add(BuildReportEntry(taskEntry.DisplayText, activeEngineName, taskStartedAt, DateTimeOffset.UtcNow, result?.ExitCode ?? -1, attempt, taskInputTokens, taskOutputTokens, "gutter"));
@@ -610,6 +735,15 @@ public sealed class RunLoopService
                         _gutterDetector.Reset();
                     }
                     AttemptRollbackIfEnabled(workingDirectory, taskSnapshot, taskEntry.DisplayText, "tests_failed", errorsPath);
+                    AppendExecutionEvent(
+                        executionPath,
+                        "task_blocked",
+                        "tests_failed",
+                        task: taskEntry.DisplayText,
+                        engine: activeEngineName,
+                        taskIndex: nextIndex.Value + 1,
+                        totalTasks: totalTasks,
+                        exitCode: result?.ExitCode);
                     reportEntries.Add(BuildReportEntry(taskEntry.DisplayText, activeEngineName, taskStartedAt, DateTimeOffset.UtcNow, result?.ExitCode ?? -1, attempt, taskInputTokens, taskOutputTokens, "tests_failed"));
                     iteration++;
                     continue;
@@ -628,7 +762,20 @@ public sealed class RunLoopService
                     {
                         _ui.WriteInfo(_s.Format("run.summary_partial", completedTasks, totalTasks));
                         WriteSessionTokensSummary(sessionInputTokens, sessionOutputTokens);
-                        return new RunLoopResult { Completed = false, Gutter = true };
+                        AppendExecutionEvent(
+                            executionPath,
+                            "run_stopped",
+                            "browser_failed_gutter",
+                            task: taskEntry.DisplayText,
+                            engine: activeEngineName,
+                            taskIndex: nextIndex.Value + 1,
+                            totalTasks: totalTasks,
+                            exitCode: result?.ExitCode);
+                        var browserGutter = new RunLoopResult { Completed = false, Gutter = true };
+                        AttemptRollbackIfEnabled(workingDirectory, taskSnapshot, taskEntry.DisplayText, "browser_failed_gutter", errorsPath);
+                        reportEntries.Add(BuildReportEntry(taskEntry.DisplayText, activeEngineName, taskStartedAt, DateTimeOffset.UtcNow, result?.ExitCode ?? -1, attempt, taskInputTokens, taskOutputTokens, "gutter"));
+                        WriteRunReport(workingDirectory, runStartedAt, browserGutter.Completed, reportEntries);
+                        return browserGutter;
                     }
                     if (_gutterDetector.IsGutter && ignoreContextStops)
                     {
@@ -637,6 +784,15 @@ public sealed class RunLoopService
                         _gutterDetector.Reset();
                     }
                     AttemptRollbackIfEnabled(workingDirectory, taskSnapshot, taskEntry.DisplayText, "browser_failed", errorsPath);
+                    AppendExecutionEvent(
+                        executionPath,
+                        "task_blocked",
+                        "browser_failed",
+                        task: taskEntry.DisplayText,
+                        engine: activeEngineName,
+                        taskIndex: nextIndex.Value + 1,
+                        totalTasks: totalTasks,
+                        exitCode: result?.ExitCode);
                     reportEntries.Add(BuildReportEntry(taskEntry.DisplayText, activeEngineName, taskStartedAt, DateTimeOffset.UtcNow, result?.ExitCode ?? -1, attempt, taskInputTokens, taskOutputTokens, "browser_failed"));
                     iteration++;
                     continue;
@@ -652,6 +808,16 @@ public sealed class RunLoopService
 
             AppendToFile(progressPath, $"- [{DateTime.UtcNow:O}] {taskEntry.DisplayText}\n");
             AppendToFile(activityPath, $"[{DateTime.UtcNow:O}] Completed task {nextIndex.Value + 1}: {taskEntry.DisplayText}\n");
+            AppendExecutionEvent(
+                executionPath,
+                "task_completed",
+                "success",
+                task: taskEntry.DisplayText,
+                engine: activeEngineName,
+                taskIndex: nextIndex.Value + 1,
+                totalTasks: totalTasks,
+                exitCode: result?.ExitCode,
+                details: $"duration_s={DateTimeOffset.UtcNow.Subtract(taskStartedAt).TotalSeconds:F1}");
             _gutterDetector.RecordAttempt(nextIndex.Value, true);
             anyTaskCompletedInRun = true;
             _terminalView?.SetStatus(_s.Format("run.status_completed_task", nextIndex.Value + 1, totalTasks));
@@ -710,6 +876,11 @@ public sealed class RunLoopService
         }
         WriteSessionTokensSummary(sessionInputTokens, sessionOutputTokens);
         var finalResult = new RunLoopResult { Completed = allTasksCompleted || anyTaskCompletedInRun };
+        AppendExecutionEvent(
+            executionPath,
+            "run_finished",
+            finalResult.Completed ? (allTasksCompleted ? "all_tasks_completed" : "max_iterations_partial_success") : "max_iterations_incomplete",
+            details: $"iterations={iteration}");
         WriteRunReport(workingDirectory, runStartedAt, finalResult.Completed, reportEntries);
         return finalResult;
     }
@@ -891,6 +1062,14 @@ public sealed class RunLoopService
         bool verbose = false,
         bool debugEngineJson = false)
     {
+        var executionPath = _workspaceInit.GetExecutionLogPath(workingDirectory);
+        Directory.CreateDirectory(_workspaceInit.GetRalphDir(workingDirectory));
+        AppendExecutionEvent(
+            executionPath,
+            "run_started",
+            "single_task_begin",
+            task: taskText);
+
         var configPath = _workspaceInit.GetConfigPath(workingDirectory);
         var config = File.Exists(configPath) ? new ConfigStore().Load(configPath) : RalphConfig.Default;
 
@@ -901,6 +1080,12 @@ public sealed class RunLoopService
         if (activeEngine == null)
         {
             _ui.WriteError(_s.Format("run.engine_not_found", activeEngineName, string.Join(", ", _engineRegistry.GetRegisteredNames())));
+            AppendExecutionEvent(
+                executionPath,
+                "run_stopped",
+                "engine_not_found",
+                task: taskText,
+                engine: activeEngineName);
             return new RunLoopResult { Completed = false };
         }
 
@@ -1013,6 +1198,13 @@ public sealed class RunLoopService
         if (result.ExitCode != 0)
         {
             _ui.WriteError(_s.Format("run.engine_failed", activeEngineName, result.ExitCode));
+            AppendExecutionEvent(
+                executionPath,
+                "run_stopped",
+                "engine_failed",
+                task: taskText,
+                engine: activeEngineName,
+                exitCode: result.ExitCode);
             var rawOutput = !string.IsNullOrWhiteSpace(result.Stderr) ? result.Stderr : result.Stdout;
             if (!string.IsNullOrWhiteSpace(rawOutput))
                 foreach (var line in FilterMeaningfulLines(rawOutput))
@@ -1032,6 +1224,13 @@ public sealed class RunLoopService
         var activityPath = _workspaceInit.GetActivityLogPath(workingDirectory);
         if (File.Exists(Path.GetDirectoryName(activityPath)!) || Directory.Exists(Path.GetDirectoryName(activityPath)!))
             AppendToFile(activityPath, $"[{DateTime.UtcNow:O}] Brownfield task: {taskText.Split('\n')[0].Trim()}\n");
+        AppendExecutionEvent(
+            executionPath,
+            "run_finished",
+            "success",
+            task: taskText,
+            engine: activeEngineName,
+            exitCode: result.ExitCode);
 
         _terminalView?.SetStatus(_s.Get("run.status_task_completed"));
         _ui.WriteInfo(_s.Format("run.done_duration", result.Duration.TotalSeconds));
@@ -1127,6 +1326,50 @@ public sealed class RunLoopService
         if (!string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
         File.AppendAllText(path, content);
+    }
+
+    private static void AppendExecutionEvent(
+        string path,
+        string eventName,
+        string reason,
+        string? task = null,
+        string? engine = null,
+        int? taskIndex = null,
+        int? totalTasks = null,
+        int? attempt = null,
+        int? exitCode = null,
+        string? details = null)
+    {
+        var parts = new List<string>
+        {
+            $"event={eventName}",
+            $"reason={reason}"
+        };
+
+        if (!string.IsNullOrWhiteSpace(task))
+            parts.Add($"task={SanitizeLogValue(task)}");
+        if (!string.IsNullOrWhiteSpace(engine))
+            parts.Add($"engine={SanitizeLogValue(engine)}");
+        if (taskIndex.HasValue)
+            parts.Add($"task_index={taskIndex.Value}");
+        if (totalTasks.HasValue)
+            parts.Add($"total_tasks={totalTasks.Value}");
+        if (attempt.HasValue)
+            parts.Add($"attempt={attempt.Value}");
+        if (exitCode.HasValue)
+            parts.Add($"exit_code={exitCode.Value}");
+        if (!string.IsNullOrWhiteSpace(details))
+            parts.Add($"details={SanitizeLogValue(details, maxLength: 400)}");
+
+        AppendToFile(path, $"[{DateTime.UtcNow:O}] {string.Join(" | ", parts)}{Environment.NewLine}");
+    }
+
+    private static string SanitizeLogValue(string value, int maxLength = 240)
+    {
+        var singleLine = value.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        if (singleLine.Length <= maxLength)
+            return singleLine;
+        return singleLine[..maxLength] + "...";
     }
 
     private static void WriteEngineDebugSnapshot(

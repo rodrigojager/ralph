@@ -21,7 +21,8 @@ public sealed class LogsCommand
         }
         var activityPath = _workspaceInit.GetActivityLogPath(workingDirectory);
         var errorsPath = _workspaceInit.GetErrorsLogPath(workingDirectory);
-        if (!File.Exists(activityPath) && !File.Exists(errorsPath))
+        var executionPath = _workspaceInit.GetExecutionLogPath(workingDirectory);
+        if (!File.Exists(activityPath) && !File.Exists(errorsPath) && !File.Exists(executionPath))
         {
             Console.WriteLine(s.Get("logs.no_logs"));
             return 0;
@@ -37,7 +38,7 @@ public sealed class LogsCommand
         if (!follow)
         {
             var lines = showAll
-                ? ReadMergedLines(activityPath, errorsPath)
+                ? ReadMergedLines(activityPath, errorsPath, executionPath)
                 : await File.ReadAllLinesAsync(path, cancellationToken);
             foreach (var line in ApplySinceFilter(lines, since))
                 Console.WriteLine(line);
@@ -59,13 +60,15 @@ public sealed class LogsCommand
         return 0;
     }
 
-    private static string[] ReadMergedLines(string activityPath, string errorsPath)
+    private static string[] ReadMergedLines(string activityPath, string errorsPath, string executionPath)
     {
         var list = new List<(DateTimeOffset? Ts, string Line)>();
         if (File.Exists(activityPath))
             list.AddRange(File.ReadAllLines(activityPath).Select(l => (ParseTimestamp(l), l)));
         if (File.Exists(errorsPath))
             list.AddRange(File.ReadAllLines(errorsPath).Select(l => (ParseTimestamp(l), l)));
+        if (File.Exists(executionPath))
+            list.AddRange(File.ReadAllLines(executionPath).Select(l => (ParseTimestamp(l), l)));
         return list
             .OrderBy(x => x.Ts ?? DateTimeOffset.MinValue)
             .Select(x => x.Line)

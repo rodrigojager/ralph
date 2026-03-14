@@ -27,4 +27,30 @@ public class TuiDashboardSafetyTests
 
         Assert.True(result);
     }
+
+    [Fact]
+    public void GetDebugLogPath_PointsInsideWorkspace()
+    {
+        var method = typeof(TuiDashboard).GetMethod("GetDebugLogPath", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var original = Directory.GetCurrentDirectory();
+        var dir = Path.Combine(Path.GetTempPath(), "RalphTuiTests_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+
+        try
+        {
+            Directory.SetCurrentDirectory(dir);
+
+            var path = (string?)method!.Invoke(null, []);
+
+            Assert.NotNull(path);
+            Assert.EndsWith(Path.Combine(".ralph", "tui-debug.log"), path!, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(original);
+            try { Directory.Delete(dir, true); } catch { }
+        }
+    }
 }

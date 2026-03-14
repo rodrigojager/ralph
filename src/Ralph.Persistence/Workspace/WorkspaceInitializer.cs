@@ -9,6 +9,8 @@ public sealed class WorkspaceInitializer
     public const string ProgressFileName = "progress.md";
     public const string ErrorsLogFileName = "errors.log";
     public const string ActivityLogFileName = "activity.log";
+    public const string ExecutionLogFileName = "execution.log";
+    public const string TuiDebugLogFileName = "tui-debug.log";
     public const string StateFileName = "state.json";
     public const string IterationFileName = ".iteration";
     public const string ConfigFileName = "config.json";
@@ -30,6 +32,12 @@ public sealed class WorkspaceInitializer
 
     public string GetActivityLogPath(string workingDirectory) =>
         Path.Combine(GetRalphDir(workingDirectory), ActivityLogFileName);
+
+    public string GetExecutionLogPath(string workingDirectory) =>
+        Path.Combine(GetRalphDir(workingDirectory), ExecutionLogFileName);
+
+    public string GetTuiDebugLogPath(string workingDirectory) =>
+        Path.Combine(GetRalphDir(workingDirectory), TuiDebugLogFileName);
 
     public string GetStatePath(string workingDirectory) =>
         Path.Combine(GetRalphDir(workingDirectory), StateFileName);
@@ -63,13 +71,15 @@ public sealed class WorkspaceInitializer
         WriteIfMissing(GetProgressPath(workingDirectory), "# Progress\n\n");
         WriteIfMissing(GetErrorsLogPath(workingDirectory), "");
         WriteIfMissing(GetActivityLogPath(workingDirectory), "");
+        WriteIfMissing(GetExecutionLogPath(workingDirectory), "");
+        WriteIfMissing(GetTuiDebugLogPath(workingDirectory), "");
         WriteIfMissing(GetStatePath(workingDirectory), "{\"iteration\":0,\"retries\":0}\n");
         WriteIfMissing(GetIterationPath(workingDirectory), "0");
         WriteIfMissing(GetConfigPath(workingDirectory), GetDefaultConfigContent());
         WriteIfMissing(GetPrdPath(workingDirectory), GetDefaultPrdContent());
         Directory.CreateDirectory(GetReportsDir(workingDirectory));
 
-        UpdateGitignore(workingDirectory);
+        UpdateGitExclude(workingDirectory);
     }
 
     private void EnsureFilesExist(string workingDirectory)
@@ -78,11 +88,14 @@ public sealed class WorkspaceInitializer
         WriteIfMissing(GetProgressPath(workingDirectory), "# Progress\n\n");
         WriteIfMissing(GetErrorsLogPath(workingDirectory), "");
         WriteIfMissing(GetActivityLogPath(workingDirectory), "");
+        WriteIfMissing(GetExecutionLogPath(workingDirectory), "");
+        WriteIfMissing(GetTuiDebugLogPath(workingDirectory), "");
         WriteIfMissing(GetStatePath(workingDirectory), "{\"iteration\":0,\"retries\":0}\n");
         WriteIfMissing(GetIterationPath(workingDirectory), "0");
         WriteIfMissing(GetConfigPath(workingDirectory), GetDefaultConfigContent());
         WriteIfMissing(GetPrdPath(workingDirectory), GetDefaultPrdContent());
         Directory.CreateDirectory(GetReportsDir(workingDirectory));
+        UpdateGitExclude(workingDirectory);
     }
 
     private static string GetDefaultPrdContent() =>
@@ -108,19 +121,49 @@ public sealed class WorkspaceInitializer
         File.WriteAllText(path, content);
     }
 
-    private static void UpdateGitignore(string workingDirectory)
+    private static void UpdateGitExclude(string workingDirectory)
     {
-        var gitignorePath = Path.Combine(workingDirectory, ".gitignore");
-        var entry = "\n.ralph/\n";
-        if (!File.Exists(gitignorePath))
+        var gitDir = ResolveGitDirectory(workingDirectory);
+        if (gitDir == null)
+            return;
+
+        var excludePath = Path.Combine(gitDir, "info", "exclude");
+        var entry = ".ralph/";
+        Directory.CreateDirectory(Path.GetDirectoryName(excludePath)!);
+
+        if (!File.Exists(excludePath))
         {
-            File.WriteAllText(gitignorePath, "# Ralph\n.ralph/\n");
+            File.WriteAllText(excludePath, "# Ralph\n.ralph/\n");
             return;
         }
-        var content = File.ReadAllText(gitignorePath);
-        if (content.Contains(".ralph/", StringComparison.Ordinal))
+
+        var content = File.ReadAllText(excludePath);
+        if (content.Contains(entry, StringComparison.Ordinal))
             return;
-        File.AppendAllText(gitignorePath, entry);
+
+        var prefix = content.EndsWith('\n') ? string.Empty : Environment.NewLine;
+        File.AppendAllText(excludePath, $"{prefix}{entry}{Environment.NewLine}");
+    }
+
+    private static string? ResolveGitDirectory(string workingDirectory)
+    {
+        var gitPath = Path.Combine(workingDirectory, ".git");
+        if (Directory.Exists(gitPath))
+            return gitPath;
+
+        if (!File.Exists(gitPath))
+            return null;
+
+        var firstLine = File.ReadLines(gitPath).FirstOrDefault()?.Trim();
+        const string prefix = "gitdir:";
+        if (string.IsNullOrWhiteSpace(firstLine) || !firstLine.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var relativePath = firstLine[prefix.Length..].Trim();
+        if (string.IsNullOrWhiteSpace(relativePath))
+            return null;
+
+        return Path.GetFullPath(Path.Combine(workingDirectory, relativePath));
     }
 
     public bool IsInitialized(string workingDirectory)

@@ -25,6 +25,8 @@ public class InitAndRunIntegrationTests
             Assert.True(File.Exists(init.GetStatePath(dir)));
             Assert.True(File.Exists(init.GetGuardrailsPath(dir)));
             Assert.True(File.Exists(init.GetProgressPath(dir)));
+            Assert.True(File.Exists(init.GetExecutionLogPath(dir)));
+            Assert.False(File.Exists(Path.Combine(dir, ".gitignore")));
         }
         finally
         {
@@ -166,9 +168,33 @@ public class InitAndRunIntegrationTests
 
             Assert.False(result.Completed);
             Assert.True(result.Gutter);
+            var executionLog = File.ReadAllText(init.GetExecutionLogPath(dir));
+            Assert.Contains("reason=context_gutter", executionLog, StringComparison.Ordinal);
             var doc = PrdParser.Parse(prdPath);
             Assert.False(doc.TaskEntries[0].IsCompleted);
             Assert.False(doc.TaskEntries[1].IsCompleted);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Init_writes_ralph_ignore_to_git_exclude_instead_of_root_gitignore()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "RalphIntegration_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(dir, ".git", "info"));
+            var init = new WorkspaceInitializer();
+
+            init.Initialize(dir);
+
+            Assert.False(File.Exists(Path.Combine(dir, ".gitignore")));
+            var excludePath = Path.Combine(dir, ".git", "info", "exclude");
+            Assert.True(File.Exists(excludePath));
+            Assert.Contains(".ralph/", File.ReadAllText(excludePath), StringComparison.Ordinal);
         }
         finally
         {

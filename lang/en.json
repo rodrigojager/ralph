@@ -1,7 +1,6 @@
 {
   "app.name": "ralph",
   "app.tagline": "ralph - PRD task loop runner",
-
   "install.welcome": "Welcome to ralph installer!",
   "install.lang.question": "Choose your language:",
   "install.lang.en": "English",
@@ -30,7 +29,6 @@
   "install.fail": "Install failed: {0}",
   "install.no_exe": "Could not determine executable path.",
   "install.config_saved": "Preferences saved.",
-
   "lang.current": "Current language: {0}",
   "lang.available": "Available languages:",
   "lang.set_ok": "Language set to: {0}",
@@ -41,7 +39,6 @@
   "lang.update_none": "Already up to date.",
   "lang.usage_set": "Usage: ralph lang set <code>  (e.g. en, ptBR)",
   "lang.unknown_subcommand": "Unknown lang subcommand: {0}. Use: current, list, set, update",
-
   "ui.current": "Current UI mode: {0}",
   "ui.set_ok": "UI mode set to: {0}",
   "ui.invalid": "Invalid UI mode '{0}'. Valid: none, spectre, gum, spectre+gum, tui",
@@ -51,7 +48,6 @@
   "ui.tui_fallback_reason": "  [!] TUI unavailable; using UI fallback. Reason: {0}",
   "ui.tui_runtime_error": "[warn] TUI error: {0}",
   "ui.tui_debug_log": "[warn] TUI debug log: {0}",
-
   "about.title": "Ralph CLI - AI Task Loop Runner",
   "about.version": "Version: {0}",
   "about.author": "Author: Rodrigo Jager",
@@ -61,7 +57,6 @@
   "about.license": "License: MIT",
   "about.ralph_loop": "Ralph CLI: Implementation tool for the Ralph Wiggum autonomous iteration technique (Ralph Loops), proposed by Geoffrey Huntley (2025). https://ghuntley.com/ .",
   "about.inspiration": "Features and implementation inspired by: https://github.com/agrimsingh/ralph-wiggum-cursor and https://github.com/michaelshimeles/ralphy",
-
   "update.checking": "Checking for updates...",
   "update.current": "Current version: {0}",
   "update.repo": "Release repository: {0}",
@@ -83,11 +78,9 @@
   "update.no_exe_path": "Cannot determine executable path.",
   "update.looking_for": "  Looking for: {0}",
   "update.available_assets": "  Available: {0}",
-
   "init.already": "Workspace already initialized at {0}",
   "init.done": "Initialized ralph workspace at {0}",
   "init.fail": "Init failed: {0}",
-
   "run.start": "Starting run loop...",
   "run.task": "Task [{0}/{1}]: {2}",
   "run.no_tasks": "No pending tasks found in PRD.",
@@ -125,13 +118,20 @@
   "run.branch_create_failed": "Could not create branch '{0}', continuing on current branch.",
   "run.fallback_engine": "Fallback engine: '{0}'",
   "run.no_output_hint": "(No output. Is command '{0}' in PATH? Try: ralph doctor)",
+  "run.model_unavailable": "Model '{1}' is not available for engine '{0}'. Set a valid model with --model.",
+  "run.mode_conflict": "Conflicting mode options: {0} and {1}. Use only one.",
+  "run.invalid_mode": "Invalid mode '{0}'. Use --mode loop or --mode wiggum.",
+  "run.mode_not_supported": "Option {0} is not supported for command {1}.",
+  "run.test_mode_conflict": "Use either --run-tests or --skip-tests, not both.",
+  "run.fast_not_supported": "--fast requires Codex with GPT model. It will be ignored for engine '{0}' / model '{1}'.",
+  "run.task_retry_limit_reached": "No progress for task {0} after {1} attempt(s). Marked as [~] for manual review and continuing.",
   "run.max_iterations_pending": "Max iterations reached with pending tasks.",
   "run.dry_run_all_completed": "  (all tasks already completed)",
   "run.dry_run_no_files": "No files will be modified (dry run).",
   "run.done_duration": "Done. ({0:F1}s)",
   "run.engine_not_found": "Engine '{0}' not found. Registered: {1}",
   "run.engine_failed_task": "{0} [{1}/{2}] \"{3}\" (exit {4})",
-  "run.engine_failed_with_log":"Engine '{0}' failed (exit code {1}). See .ralph/execution.log",
+  "run.engine_failed_with_log": "Engine '{0}' failed (exit code {1}). See .ralph/execution.log",
   "run.gutter_details": "GUTTER: no progress after {0} attempts. Details in .ralph/execution.log",
   "run.engine_exit_stopping": "Engine exited with code {0}. Stopping.",
   "run.lint_failed_not_marked": "Lint failed. Task not marked complete.",
@@ -174,10 +174,8 @@
   "cursor.output.current_task": "Current task",
   "cursor.output.success": "Success",
   "cursor.output.error": "Error",
-
   "once.start": "Running single task...",
   "once.brownfield": "Brownfield mode: {0}",
-
   "tasks.list_header": "Tasks in {0}:",
   "tasks.none": "No tasks found.",
   "tasks.next": "Next task: [{0}] {1}",
@@ -192,7 +190,6 @@
   "tasks.sync.usage": "Usage: ralph tasks sync --repo owner/repo [--label NAME] [--state open|closed|all] [--output PATH] [--force]",
   "tasks.sync.invalid_state": "Invalid --state. Use: open, closed, all",
   "tasks.sync.output_exists": "Output already exists: {0}. Use --force to overwrite.",
-
   "config.list_header": "Configuration ({0}):",
   "config.get_key": "{0} = {1}",
   "config.set_ok": "Set {0} = {1}",
@@ -210,14 +207,12 @@
   "config.usage": "Usage: ralph config list|get|set [key] [value]",
   "config.usage_get": "Usage: ralph config get <key>",
   "config.usage_set": "Usage: ralph config set <key> <value>",
-
   "logs.tail_header": "Logs ({0}):",
   "logs.no_logs": "No log entries found.",
   "logs.follow_all_unsupported": "--follow with --level all is not supported. Use: info or error.",
   "logs.usage": "Usage: ralph logs tail [--follow] [--level info|error|all] [--since ISO-8601]",
   "report.usage": "Usage: ralph report last",
   "report.none": "No report found yet.",
-
   "doctor.header": "ralph doctor",
   "doctor.separator": "------------",
   "doctor.workspace_ok": "  [OK] Workspace initialized",
@@ -246,7 +241,6 @@
   "doctor.process_none": "  [OK] No matching processes found.",
   "doctor.process_count": "  [i] Matching processes: {0}",
   "doctor.process_item": "    pid={0} name={1} started={2}",
-
   "clean.confirm": "Delete .ralph/ workspace at {0}? [y/N] ",
   "clean.done": "Cleaned workspace at {0}",
   "clean.aborted": "Aborted.",
@@ -254,7 +248,6 @@
   "clean.force_required": "Use --force to remove .ralph/ and reset state.",
   "clean.nothing": "Nothing to clean.",
   "clean.fail": "Clean failed: {0}",
-
   "rules.list_header": "Guardrails ({0}):",
   "rules.empty": "(no guardrails defined)",
   "rules.added": "Added rule: {0}",
@@ -263,14 +256,12 @@
   "rules.force_required": "Use --force to clear all guardrails.",
   "rules.usage": "Usage: ralph rules <list|add|clear> [text] [--force]",
   "rules.usage_add": "Usage: ralph rules add \"rule text\"",
-
   "parallel.start": "Running {0} tasks with max parallelism = {1}...",
   "parallel.no_tasks": "No tasks to run in parallel.",
   "parallel.failed_task": "[parallel] failed: {0}",
   "parallel.summary": "Parallel finished: {0} succeeded, {1} failed",
   "parallel.dry_run": "[DRY RUN] Tasks planned for parallel execution:",
   "parallel.retry_failed": "Retrying only failed tasks ({0})...",
-
   "error.prd_not_found": "PRD file not found at {0}",
   "error.prd_not_found_hint": "PRD file not found at {0}. Pass a task directly: ralph once \"your task\"",
   "error.unknown_command": "Unknown command: {0}",
@@ -278,10 +269,10 @@
   "error.unknown_option": "Unknown option '{0}'. Use ralph --help for the supported flags.",
   "error.unhandled": "Unhandled error: {0}",
   "error.invalid_flag_typo": "Unknown option '{0}'. Did you mean '{1}'?",
+  "error.missing_value": "Option '{0}' requires a value.",
   "run.cancel_requested": "Cancellation requested (Ctrl+C). Stopping safely...",
   "run.force_exit_requested": "Force exit requested. Exiting now.",
   "run.operation_canceled": "Operation canceled.",
-
   "tui.panel.status": "Status",
   "tui.panel.tokens": "Tokens",
   "tui.panel.activity_log": "Activity Log",
@@ -290,7 +281,7 @@
   "tui.panel.engine_output": "Engine Output",
   "tui.tokens_template": "in:    {0}\nout:   {1}\ntotal: {2}\nctx:   {3}",
   "tui.status.starting": "Starting...",
-  "tui.status.completed": "Completed \u2014 Press [Q] to exit",
+  "tui.status.completed": "Completed — Press [Q] to exit",
   "tui.shortcut.fallback": "[F5] Fallback",
   "tui.shortcut.quit": "[Q] Quit",
   "tui.shortcut.page_up": "[PgUp] Scroll Up",
@@ -301,9 +292,6 @@
   "tui.copy.ok": "Panel content copied to clipboard.",
   "tui.copy.empty": "Nothing to copy in this panel.",
   "tui.copy.fallback_file": "Clipboard unavailable. Saved panel content to: {0}",
-
   "help.header": "ralph - PRD task loop runner",
-  "help.full": "\nUSAGE\n  ralph <command> [options]\n\nWORKSPACE\n  ralph init [--force]                  Initialize .ralph/ workspace in current directory\n  ralph clean [--force]                 Remove .ralph/ workspace\n  ralph doctor [--yes|--non-interactive]\n                                        Check workspace, PRD, engines and PATH\n                                        Offer git init when outside a repository\n\nRUNNING TASKS\n  ralph run   [options]                 Run all pending PRD tasks in a loop\n  ralph loop  [options]                 Alias for run\n  ralph once  [\"task\"] [options]        Run one PRD task (or a one-off task without PRD)\n  ralph parallel [\"task\" ...] [options] Run tasks concurrently (or all pending PRD tasks)\n\nRUN OPTIONS\n  --prd PATH              Path to PRD file (default: PRD.md in cwd)\n  --engine NAME           Engine to use (cursor, claude, codex, opencode, qwen, droid, copilot, gemini)\n  --model NAME            Model override\n  --sonnet                Shortcut: engine=claude model=claude-sonnet-4-6\n  --opus                  Shortcut: engine=claude model=claude-opus-4-6\n  --haiku                 Shortcut: engine=claude model=claude-haiku-4-5\n  --max-iterations N      Stop after N iterations\n  --max-parallel N        Max workers for 'parallel' (default: 2)\n  --retry-failed          Re-run only failed tasks once in 'parallel'\n  --parallel-integration <merge|create-pr|no-merge>\n                          Post-parallel integration strategy\n  --max-retries N         Max retries per task\n  --retry-delay SEC       Seconds between retries\n  --max-tokens N          Token limit passed to engine\n  --temperature T         Temperature passed to engine\n  --skip-tests            Skip test execution after each task\n  --no-lint / --skip-lint Skip lint execution\n  --fast                  Skip both tests and lint\n  --dry-run               Preview execution without running engine\n  --debug-engine-json     Save raw engine result snapshots to .ralph/debug/engine-json/\n  --verbose / -v          Show engine prompt, stdout and timing\n  --branch-per-task       Create a git branch for each task\n  --base-branch NAME      Base branch for new task branches (default: current)\n  --create-pr             Push and open a GitHub PR after each task\n  --draft-pr              Create PR as draft (implies --create-pr)\n  --auto-rollback         Auto-rollback task changes on failure\n  --ignore-context-stops  Ignore DEFER/GUTTER stop signals (default)\n  --respect-context-stops Re-enable stop-on-DEFER/GUTTER behavior\n  --no-change-policy <fallback|retry|fail-fast>\n                          Override no-change behavior for this run\n  --no-change-max-retries N\n                          Max retries when task has no file changes\n  --no-change-stop-on-max-retries\n                          Stop run when max no-change retries is reached (default)\n  --no-change-continue-on-max-retries\n                          Continue loop even after max no-change retries\n  -- ...args              Pass remaining args directly to the engine\n\nTASKS\n  ralph tasks list [--prd PATH]         List all tasks\n  ralph tasks next [--prd PATH]         Show next pending task\n  ralph tasks done <n> [--prd PATH]     Mark task N as done\n  ralph tasks sync --repo owner/repo    Sync GitHub issues -> PRD\n    [--label NAME] [--state open|closed|all] [--output PATH] [--force]\n\nCONFIG\n  ralph config list [--prd PATH]        Show all config values\n  ralph config get <key>                Get a config value\n  ralph config set <key> <value>        Set a config value\n\nRULES\n  ralph rules list                      List guardrails\n  ralph rules add \"rule text\"           Add a guardrail\n  ralph rules clear [--force]           Clear all guardrails\n\nLOGS\n  ralph logs tail [--follow] [--level info|error|all] [--since ISO-8601]\n\nREPORTS\n  ralph report last                     Show latest execution report\n\nINSTALL & UPDATE\n  ralph install [DIR]                   Install ralph globally (asks language/UI)\n  ralph update                          Self-update to the latest release\n\nLANGUAGE & UI\n  ralph lang current                    Show current language\n  ralph lang list                       List available languages\n  ralph lang set <code>                 Change language (e.g. en, ptBR)\n  ralph lang update                     Update language files\n  ralph ui current                      Show current UI mode\n  ralph ui set <mode>                   Set UI mode (none|spectre|gum|spectre+gum|tui)\n  ralph ui toggle                       Cycle through UI modes\n  --ui <mode>                           Override UI mode for this invocation\n  RALPH_UI=none ralph ...               Emergency fallback to plain terminal\n\nOTHER\n  ralph about                           About ralph and author\n  ralph --version / -V                  Show version\n  ralph --help / -h                     Show this help"
+  "help.full": "\nUSAGE\n  ralph <command> [options]\n\nWORKSPACE\n  ralph init [--force]                  Initialize .ralph/ workspace in current directory\n  ralph clean [--force]                 Remove .ralph/ workspace\n  ralph doctor [--yes|--non-interactive]\n                                        Check workspace, PRD, engines and PATH\n                                        Offer git init when outside a repository\n\nRUNNING TASKS\n  ralph run   [options]                 Run all pending PRD tasks in a loop\n  ralph loop  [options]                 Alias for run\n  ralph once  [\"task\"] [options]        Run one PRD task (or a one-off task without PRD)\n  ralph parallel [\"task\" ...] [options] Run tasks concurrently (or all pending PRD tasks)\n\nRUN OPTIONS\n  --prd PATH                           Path to PRD file (default: PRD.md in cwd)\n  --engine NAME                        Engine to use (cursor, claude, codex, opencode, qwen, droid, copilot, gemini)\n  --model NAME                         Model override\n  --sonnet                             Shortcut: engine=claude model=claude-sonnet-4-6\n  --opus                               Shortcut: engine=claude model=claude-opus-4-6\n  --haiku                              Shortcut: engine=claude model=claude-haiku-4-5\n  -l, -loop, --loop                   Ralph Loop mode (default): common PRD context + guardrails + next pending task\n  -w, -wiggum, --wiggum               Ralph Wiggum mode: full PRD + guardrails + active task\n  --mode loop|wiggum                  Ralph mode for this execution: loop or wiggum\n  --force                              Loop mode: never stop until each task is marked [~] or completed\n  -r, --retries N\n  --max-retries N                      Max attempts per task before marking [~]\n  --max-iterations N                   Stop after N iterations\n  --max-parallel N                     Max workers for 'parallel' (default: 2)\n  --retry-failed                       Re-run only failed tasks once in 'parallel'\n  --parallel-integration <merge|create-pr|no-merge>\n                                       Post-parallel integration strategy\n  --retry-delay SEC                    Seconds between retries\n  --max-tokens N                       Token limit passed to engine\n  --temperature T                      Temperature passed to engine\n  --run-tests                          Run tests explicitly for each task\n  --skip-tests                         Skip test execution (default)\n  --no-lint / --skip-lint              Skip lint execution\n  --fast                               Enable Codex fast mode via config (service_tier=fast)\n  --no-commit                          Skip PRD commit/branch/PR actions\n  --dry-run                            Preview execution without running engine\n  --debug-engine-json                  Save raw engine result snapshots to .ralph/debug/engine-json/\n  --verbose / -v                       Show engine prompt, stdout and timing\n  --branch-per-task                    Create a git branch for each task\n  --base-branch NAME                   Base branch for new task branches (default: current)\n  --create-pr                          Push and open a GitHub PR after each task\n  --draft-pr                           Create PR as draft (implies --create-pr)\n  --auto-rollback                      Auto-rollback task changes on failure\n  --ignore-context-stops               Ignore DEFER/GUTTER stop signals (default)\n  --respect-context-stops              Re-enable stop-on-DEFER/GUTTER behavior\n  --no-change-policy <fallback|retry|fail-fast>\n                                       Override no-change behavior for this run\n  --no-change-max-retries N            Max retries when task has no file changes\n  --no-change-stop-on-max-retries      Stop run when max no-change retries is reached (default)\n  --no-change-continue-on-max-retries  Continue loop even after max no-change retries\n  -- ...args                           Pass remaining args directly to the engine\n\nTASKS\n  ralph tasks list [--prd PATH]         List all tasks\n  ralph tasks next [--prd PATH]         Show next pending task\n  ralph tasks done <n> [--prd PATH]     Mark task N as done\n  ralph tasks sync --repo owner/repo    Sync GitHub issues -> PRD\n    [--label NAME] [--state open|closed|all] [--output PATH] [--force]\n\nCONFIG\n  ralph config list [--prd PATH]        Show all config values\n  ralph config get <key>                Get a config value\n  ralph config set <key> <value>        Set a config value\n\nRULES\n  ralph rules list                      List guardrails\n  ralph rules add \"rule text\"           Add a guardrail\n  ralph rules clear [--force]           Clear all guardrails\n\nLOGS\n  ralph logs tail [--follow] [--level info|error|all] [--since ISO-8601]\n\nREPORTS\n  ralph report last                     Show latest execution report\n\nINSTALL & UPDATE\n  ralph install [DIR]                   Install ralph globally (asks language/UI)\n  ralph update                          Self-update to the latest release\n\nLANGUAGE & UI\n  ralph lang current                    Show current language\n  ralph lang list                       List available languages\n  ralph lang set <code>                 Change language (e.g. en, ptBR)\n  ralph lang update                     Update language files\n  ralph ui current                      Show current UI mode\n  ralph ui set <mode>                   Set UI mode (none|spectre|gum|spectre+gum|tui)\n  ralph ui toggle                       Cycle through UI modes\n  --ui <mode>                          Override UI mode for this invocation\n  RALPH_UI=none ralph ...               Emergency fallback to plain terminal\n\nOTHER\n  ralph about                           About ralph and author\n  ralph --version / -V                  Show version\n  ralph --help / -h                     Show this help"
 }
-
-

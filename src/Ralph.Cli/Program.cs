@@ -53,8 +53,13 @@ var uiMode = globalConfig.EffectiveUi();
 var cwd = Directory.GetCurrentDirectory();
 
 string? command = null;
-var skipTests = false;
+var skipTests = true;
+var runMode = RunCommandMode.Loop;
+var runModeWasSet = false;
+var runModeSetBy = (string?)null;
 var force = false;
+var noCommit = false;
+var fast = false;
 var yes = false;
 var nonInteractive = false;
 var doctorProcesses = false;
@@ -89,6 +94,7 @@ var noChangePolicyOverride = (string?)null;
 var noChangeMaxAttemptsOverride = (int?)null;
 var noChangeStopOnMaxAttemptsOverride = (bool?)null;
 var parallelIntegration = (string?)null;
+var runTestsWasSet = false;
 var positionals = new List<string>();
 var passthroughArgs = new List<string>();
 var i = 0;
@@ -106,6 +112,11 @@ while (i < argsList.Count)
         return 1;
     }
     if (a == "--ui" && i + 1 < argsList.Count) { uiMode = argsList[i + 1]; i += 2; continue; }
+    if (a == "--ui")
+    {
+        Console.Error.WriteLine(s.Format("error.missing_value", "--ui"));
+        return 1;
+    }
     if (a == "init")     { command = "init";     i++; continue; }
     if (a == "setup")    { command = "init";     i++; continue; }
     if (a == "run")      { command = "run";      i++; continue; }
@@ -124,12 +135,97 @@ while (i < argsList.Count)
     if (a == "about")    { command = "about";    i++; continue; }
     if (a == "update")   { command = "update";   i++; continue; }
     if (a == "report")   { command = "report";   i++; continue; }
-    if (a == "--skip-tests") { skipTests = true; i++; continue; }
+    if (a == "--skip-tests")
+    {
+        if (runTestsWasSet && skipTests == false)
+        {
+            Console.Error.WriteLine(s.Get("run.test_mode_conflict"));
+            return 1;
+        }
+        skipTests = true;
+        runTestsWasSet = true;
+        i++;
+        continue;
+    }
+    if (a == "--run-tests")
+    {
+        if (runTestsWasSet && skipTests == true)
+        {
+            Console.Error.WriteLine(s.Get("run.test_mode_conflict"));
+            return 1;
+        }
+        skipTests = false;
+        runTestsWasSet = true;
+        i++;
+        continue;
+    }
+    if (a == "--fast")   { fast = true; i++; continue; }
+    if (a == "--mode" && i + 1 < argsList.Count)
+    {
+        var value = argsList[i + 1].Trim().ToLowerInvariant();
+        if (value is not ("loop" or "wiggum"))
+        {
+            Console.Error.WriteLine(s.Format("run.invalid_mode", value));
+            return 1;
+        }
+        var modeValue = value == "loop" ? RunCommandMode.Loop : RunCommandMode.Wiggum;
+        if (runModeWasSet && runMode != modeValue)
+        {
+            Console.Error.WriteLine(s.Format("run.mode_conflict", runModeSetBy ?? "--loop", "--mode " + value));
+            return 1;
+        }
+        runMode = modeValue;
+        runModeWasSet = true;
+        runModeSetBy = "--mode";
+        i += 2;
+        continue;
+    }
+    if (a == "--mode")
+    {
+        Console.Error.WriteLine(s.Format("error.missing_value", "--mode"));
+        return 1;
+    }
+    if (a == "--loop" || a == "-l" || a == "-loop")
+    {
+        if (runModeWasSet && runMode != RunCommandMode.Loop)
+        {
+            Console.Error.WriteLine(s.Format("run.mode_conflict", runModeSetBy ?? "--wiggum", a));
+            return 1;
+        }
+        runMode = RunCommandMode.Loop;
+        runModeWasSet = true;
+        runModeSetBy = a;
+        i++;
+        continue;
+    }
+    if (a == "--wiggum" || a == "-w" || a == "-wiggum")
+    {
+        if (runModeWasSet && runMode != RunCommandMode.Wiggum)
+        {
+            Console.Error.WriteLine(s.Format("run.mode_conflict", runModeSetBy ?? "--loop", a));
+            return 1;
+        }
+        runMode = RunCommandMode.Wiggum;
+        runModeWasSet = true;
+        runModeSetBy = a;
+        i++;
+        continue;
+    }
     if (a == "--no-lint" || a == "--skip-lint") { skipLint = true; i++; continue; }
-    if (a == "--fast")   { skipTests = true; skipLint = true; i++; continue; }
+    if (a == "--no-commit") { noCommit = true; i++; continue; }
     if (a == "--dry-run") { dryRun = true; i++; continue; }
     if (a == "--retry-failed") { retryFailed = true; i++; continue; }
-    if (a == "--parallel-integration" && i + 1 < argsList.Count) { parallelIntegration = argsList[i + 1]; i += 2; continue; }
+    if (a == "--parallel-integration")
+    {
+        if (i + 1 >= argsList.Count)
+        {
+            Console.Error.WriteLine(s.Format("error.missing_value", "--parallel-integration"));
+            return 1;
+        }
+        parallelIntegration = argsList[i + 1];
+        i += 2;
+        continue;
+    }
     if (a == "--auto-rollback") { autoRollback = true; i++; continue; }
     if (a == "--debug-engine-json") { debugEngineJson = true; i++; continue; }
     if (a == "--ignore-context-stops") { ignoreContextStops = true; i++; continue; }
@@ -148,6 +244,11 @@ while (i < argsList.Count)
         i += 2;
         continue;
     }
+    if (a == "--no-change-policy")
+    {
+        Console.Error.WriteLine(s.Format("error.missing_value", "--no-change-policy"));
+        return 1;
+    }
     if (a == "--no-change-max-retries" && i + 1 < argsList.Count)
     {
         if (!int.TryParse(argsList[i + 1], out var attempts))
@@ -159,11 +260,26 @@ while (i < argsList.Count)
         i += 2;
         continue;
     }
+    if (a == "--no-change-max-retries")
+    {
+        Console.Error.WriteLine(s.Format("error.missing_value", "--no-change-max-retries"));
+        return 1;
+    }
     if (a == "--no-change-stop-on-max-retries") { noChangeStopOnMaxAttemptsOverride = true; i++; continue; }
     if (a == "--no-change-continue-on-max-retries") { noChangeStopOnMaxAttemptsOverride = false; i++; continue; }
     if (a == "--verbose" || a == "-v") { verbose = true; i++; continue; }
     if (a == "--branch-per-task") { branchPerTask = true; i++; continue; }
-    if (a == "--base-branch" && i + 1 < argsList.Count) { baseBranch = argsList[i + 1]; i += 2; continue; }
+    if (a == "--base-branch")
+    {
+        if (i + 1 >= argsList.Count)
+        {
+            Console.Error.WriteLine(s.Format("error.missing_value", "--base-branch"));
+            return 1;
+        }
+        baseBranch = argsList[i + 1];
+        i += 2;
+        continue;
+    }
     if (a == "--create-pr") { createPr = true; i++; continue; }
     if (a == "--draft-pr")  { draftPr = true; createPr = true; i++; continue; }
     if (a == "--force")  { force = true; i++; continue; }
@@ -174,21 +290,192 @@ while (i < argsList.Count)
     if (a == "--opus")   { engine ??= "claude"; model = "claude-opus-4-6";   i++; continue; }
     if (a == "--haiku")  { engine ??= "claude"; model = "claude-haiku-4-5";  i++; continue; }
     if (a == "--engine" && i + 1 < argsList.Count) { engine = argsList[i + 1]; i += 2; continue; }
-    if (a == "--model"  && i + 1 < argsList.Count) { model  = argsList[i + 1]; i += 2; continue; }
-    if (a == "--prd"    && i + 1 < argsList.Count) { prdOverride = argsList[i + 1]; i += 2; continue; }
-    if (a == "--repo"   && i + 1 < argsList.Count) { githubRepo  = argsList[i + 1]; i += 2; continue; }
-    if (a == "--label"  && i + 1 < argsList.Count) { githubLabel = argsList[i + 1]; i += 2; continue; }
-    if (a == "--state"  && i + 1 < argsList.Count) { githubState = argsList[i + 1]; i += 2; continue; }
-    if (a == "--output" && i + 1 < argsList.Count) { outputOverride = argsList[i + 1]; i += 2; continue; }
-    if (a == "--max-retries"    && i + 1 < argsList.Count) { int.TryParse(argsList[i + 1], out var mr); maxRetries = mr; i += 2; continue; }
-    if (a == "--retry-delay"    && i + 1 < argsList.Count) { int.TryParse(argsList[i + 1], out var rd); retryDelaySeconds = rd; i += 2; continue; }
-    if (a == "--max-iterations" && i + 1 < argsList.Count) { int.TryParse(argsList[i + 1], out var mi); maxIterations = mi; i += 2; continue; }
-    if (a == "--max-parallel"   && i + 1 < argsList.Count) { int.TryParse(argsList[i + 1], out var mp); maxParallel = mp; i += 2; continue; }
-    if (a == "--max-tokens"     && i + 1 < argsList.Count) { int.TryParse(argsList[i + 1], out var mt); maxTokens = mt; i += 2; continue; }
-    if (a == "--temperature"    && i + 1 < argsList.Count) { double.TryParse(argsList[i + 1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var t); temperature = t; i += 2; continue; }
+    if (a == "--engine")
+    {
+        if (i + 1 >= argsList.Count)
+        {
+            Console.Error.WriteLine(s.Format("error.missing_value", "--engine"));
+            return 1;
+        }
+        engine = argsList[i + 1];
+        i += 2;
+        continue;
+    }
+    if (a == "--model")
+    {
+        if (i + 1 >= argsList.Count)
+        {
+            Console.Error.WriteLine(s.Format("error.missing_value", "--model"));
+            return 1;
+        }
+        model = argsList[i + 1];
+        i += 2;
+        continue;
+    }
+    if (a == "--prd")
+    {
+        if (i + 1 >= argsList.Count)
+        {
+            Console.Error.WriteLine(s.Format("error.missing_value", "--prd"));
+            return 1;
+        }
+        prdOverride = argsList[i + 1];
+        i += 2;
+        continue;
+    }
+    if (a == "--repo")
+    {
+        if (i + 1 >= argsList.Count)
+        {
+            Console.Error.WriteLine(s.Format("error.missing_value", "--repo"));
+            return 1;
+        }
+        githubRepo = argsList[i + 1];
+        i += 2;
+        continue;
+    }
+    if (a == "--label")
+    {
+        if (i + 1 >= argsList.Count)
+        {
+            Console.Error.WriteLine(s.Format("error.missing_value", "--label"));
+            return 1;
+        }
+        githubLabel = argsList[i + 1];
+        i += 2;
+        continue;
+    }
+    if (a == "--state")
+    {
+        if (i + 1 >= argsList.Count)
+        {
+            Console.Error.WriteLine(s.Format("error.missing_value", "--state"));
+            return 1;
+        }
+        githubState = argsList[i + 1];
+        i += 2;
+        continue;
+    }
+    if (a == "--output")
+    {
+        if (i + 1 >= argsList.Count)
+        {
+            Console.Error.WriteLine(s.Format("error.missing_value", "--output"));
+            return 1;
+        }
+        outputOverride = argsList[i + 1];
+        i += 2;
+        continue;
+    }
+    if ((a == "-r" || a == "--retries" || a == "--max-retries") && i + 1 < argsList.Count)
+    {
+        if (!int.TryParse(argsList[i + 1], out var mr) || mr < 1)
+        {
+            Console.Error.WriteLine(s.Get("config.invalid_int"));
+            return 1;
+        }
+        maxRetries = mr;
+        i += 2;
+        continue;
+    }
+    if (a == "--retry-delay" && i + 1 < argsList.Count)
+    {
+        if (!int.TryParse(argsList[i + 1], out var rd) || rd < 0)
+        {
+            Console.Error.WriteLine(s.Get("config.invalid_int"));
+            return 1;
+        }
+        retryDelaySeconds = rd;
+        i += 2;
+        continue;
+    }
+    if (a == "--retry-delay")
+    {
+        Console.Error.WriteLine(s.Format("error.missing_value", "--retry-delay"));
+        return 1;
+    }
+    if (a == "--max-iterations" && i + 1 < argsList.Count)
+    {
+        if (!int.TryParse(argsList[i + 1], out var mi) || mi < 1)
+        {
+            Console.Error.WriteLine(s.Get("config.invalid_int"));
+            return 1;
+        }
+        maxIterations = mi;
+        i += 2;
+        continue;
+    }
+    if (a == "--max-iterations")
+    {
+        Console.Error.WriteLine(s.Format("error.missing_value", "--max-iterations"));
+        return 1;
+    }
+    if (a == "--max-parallel" && i + 1 < argsList.Count)
+    {
+        if (!int.TryParse(argsList[i + 1], out var mp) || mp < 1)
+        {
+            Console.Error.WriteLine(s.Get("config.invalid_int"));
+            return 1;
+        }
+        maxParallel = mp;
+        i += 2;
+        continue;
+    }
+    if (a == "--max-parallel")
+    {
+        Console.Error.WriteLine(s.Format("error.missing_value", "--max-parallel"));
+        return 1;
+    }
+    if (a == "--max-tokens" && i + 1 < argsList.Count)
+    {
+        if (!int.TryParse(argsList[i + 1], out var mt) || mt < 1)
+        {
+            Console.Error.WriteLine(s.Get("config.invalid_int"));
+            return 1;
+        }
+        maxTokens = mt;
+        i += 2;
+        continue;
+    }
+    if (a == "--max-tokens")
+    {
+        Console.Error.WriteLine(s.Format("error.missing_value", "--max-tokens"));
+        return 1;
+    }
+    if (a == "--temperature" && i + 1 < argsList.Count)
+    {
+        if (!double.TryParse(argsList[i + 1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var t))
+        {
+            Console.Error.WriteLine(s.Get("config.invalid_float"));
+            return 1;
+        }
+        temperature = t;
+        i += 2;
+        continue;
+    }
+    if (a == "--temperature")
+    {
+        Console.Error.WriteLine(s.Format("error.missing_value", "--temperature"));
+        return 1;
+    }
+    if ((a == "-r" || a == "--retries" || a == "--max-retries") )
+    {
+        Console.Error.WriteLine(s.Format("error.missing_value", a));
+        return 1;
+    }
     if (a == "--follow") { followLogs = true; i++; continue; }
-    if (a == "--level"  && i + 1 < argsList.Count) { logsLevel = argsList[i + 1]; i += 2; continue; }
-    if (a == "--since"  && i + 1 < argsList.Count) { logsSince = argsList[i + 1]; i += 2; continue; }
+    if (a == "--level" && i + 1 < argsList.Count) { logsLevel = argsList[i + 1]; i += 2; continue; }
+    if (a == "--level")
+    {
+        Console.Error.WriteLine(s.Format("error.missing_value", "--level"));
+        return 1;
+    }
+    if (a == "--since" && i + 1 < argsList.Count) { logsSince = argsList[i + 1]; i += 2; continue; }
+    if (a == "--since")
+    {
+        Console.Error.WriteLine(s.Format("error.missing_value", "--since"));
+        return 1;
+    }
     if (a == "--help" || a == "-h")
     {
         PrintHelp(s);
@@ -201,6 +488,12 @@ while (i < argsList.Count)
     }
     positionals.Add(a);
     i++;
+}
+
+if (command == "once" && runModeWasSet)
+{
+    Console.Error.WriteLine(s.Format("run.mode_not_supported", "--wiggum/--loop/--mode", "once"));
+    return 1;
 }
 
 // ── UI layer ──────────────────────────────────────────────────────────────────
@@ -288,7 +581,7 @@ if (tuiDashboard != null)
 
 // ── Commands ──────────────────────────────────────────────────────────────────
 var initCmd        = new InitCommand(workspaceInit);
-var runCmd         = new RunCommand(runLoop);
+var runCmd         = new RunCommand(runLoop, s);
 var onceCmd        = new OnceCommand(runLoop);
 var parallelCmd    = new ParallelCommand(runLoop, workspaceInit, new ConfigStore());
 var installCmd     = new InstallCommand();
@@ -431,8 +724,8 @@ try
             // startup code does NOT write to the console before Terminal.Gui takes
             // over. Then run Terminal.Gui blocking on the MAIN THREAD.
             var cmdTask = command == "run"
-                ? Task.Run(() => runCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, maxIterations: maxIterations, dryRun: dryRun, verbose: verbose, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, cancellationToken: cancellation.Token))
-                : Task.Run(() => onceCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, dryRun: dryRun, verbose: verbose, taskOverride: inlineTask, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, cancellationToken: cancellation.Token));
+                ? Task.Run(() => runCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, maxRetries, retryDelaySeconds, maxIterations: maxIterations, dryRun: dryRun, verbose: verbose, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, mode: runMode, force: force, noCommit: noCommit, fast: fast, cancellationToken: cancellation.Token))
+                : Task.Run(() => onceCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, dryRun: dryRun, verbose: verbose, taskOverride: inlineTask, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, noCommit: noCommit, fast: fast, cancellationToken: cancellation.Token));
 
             tuiDashboard.MonitoredTask = cmdTask;
             try
@@ -450,12 +743,12 @@ try
 
         // Non-TUI path: direct async execution.
         if (command == "run")
-            return await runCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, maxIterations: maxIterations, dryRun: dryRun, verbose: verbose, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, cancellationToken: cancellation.Token);
+            return await runCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, maxRetries, retryDelaySeconds, maxIterations: maxIterations, dryRun: dryRun, verbose: verbose, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, mode: runMode, force: force, noCommit: noCommit, fast: fast, cancellationToken: cancellation.Token);
 
         if (inlineTask != null)
-            return await onceCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, dryRun: dryRun, verbose: verbose, taskOverride: inlineTask, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, cancellationToken: cancellation.Token);
+            return await onceCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, dryRun: dryRun, verbose: verbose, taskOverride: inlineTask, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, noCommit: noCommit, fast: fast, cancellationToken: cancellation.Token);
 
-        return await onceCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, dryRun: dryRun, verbose: verbose, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, cancellationToken: cancellation.Token);
+        return await onceCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, dryRun: dryRun, verbose: verbose, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, noCommit: noCommit, fast: fast, cancellationToken: cancellation.Token);
     }
 }
 catch (OperationCanceledException)

@@ -5,6 +5,19 @@ namespace Ralph.Tests.Commands;
 
 public class CliProcessContractTests
 {
+    [Theory]
+    [InlineData("run --mode", "--mode")]
+    [InlineData("run --retries", "--retries")]
+    [InlineData("run --max-iterations", "--max-iterations")]
+    [InlineData("about --ui", "--ui")]
+    public void ParseErrors_MissingValue_ShowsLocalizedMessage(string arguments, string option)
+    {
+        var result = RunCli(Directory.GetCurrentDirectory(), arguments);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains($"Option '{option}' requires a value.", result.Stderr, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void About_UnknownFlag_ReturnsError()
     {
@@ -33,6 +46,35 @@ public class CliProcessContractTests
         {
             SafeDelete(dir);
         }
+    }
+
+    [Fact]
+    public void Help_ContainsModeOption()
+    {
+        var result = RunCli(Directory.GetCurrentDirectory(), "--help");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("--mode loop|wiggum", result.Stdout, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunModeConflict_ReturnsError()
+    {
+        var result = RunCli(Directory.GetCurrentDirectory(), "run --loop --wiggum");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("Conflicting mode options", result.Stderr, StringComparison.Ordinal);
+        Assert.Contains("--loop", result.Stderr, StringComparison.Ordinal);
+        Assert.Contains("--wiggum", result.Stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunTestModeConflict_ReturnsError()
+    {
+        var result = RunCli(Directory.GetCurrentDirectory(), "run --run-tests --skip-tests");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("Use either --run-tests or --skip-tests, not both.", result.Stderr, StringComparison.Ordinal);
     }
 
     private static (int ExitCode, string Stdout, string Stderr) RunCli(string workingDirectory, string arguments, string? pathOverride = null)

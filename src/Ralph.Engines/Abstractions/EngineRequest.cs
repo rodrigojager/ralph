@@ -12,4 +12,5 @@ public sealed class EngineRequest
     public string? CommandResolutionSource { get; init; }
     public string? ModelOverride { get; init; }
     public IReadOnlyList<string>? ExtraArgsPassthrough { get; init; }
+    public bool Fast { get; init; }
 }

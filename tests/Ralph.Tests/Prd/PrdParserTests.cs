@@ -74,6 +74,87 @@ browser_command: npx playwright test
     }
 
     [Fact]
+    public void GetSharedContext_returns_common_prd_text_before_tasks()
+    {
+        var content = @"---
+task: My task
+engine: codex
+---
+# Shared context
+
+Use DDD.
+Do not change public APIs unless strictly necessary.
+
+- [ ] First task
+- [ ] Second task";
+        var doc = PrdParser.ParseContent(content);
+
+        var sharedContext = doc.GetSharedContext();
+
+        Assert.NotNull(sharedContext);
+        Assert.Contains("# Shared context", sharedContext, StringComparison.Ordinal);
+        Assert.Contains("Use DDD.", sharedContext, StringComparison.Ordinal);
+        Assert.DoesNotContain("task: My task", sharedContext, StringComparison.Ordinal);
+        Assert.DoesNotContain("- [ ] First task", sharedContext, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GetSharedContext_includes_all_non_task_blocks_before_first_task()
+    {
+        var content = @"# Overview
+
+Block one.
+
+## Constraints
+
+Block two.
+
+```md
+example block
+```
+
+## Notes
+
+Block three.
+
+- [ ] First task
+- [ ] Second task";
+        var doc = PrdParser.ParseContent(content);
+
+        var sharedContext = doc.GetSharedContext();
+
+        Assert.NotNull(sharedContext);
+        Assert.Contains("# Overview", sharedContext, StringComparison.Ordinal);
+        Assert.Contains("## Constraints", sharedContext, StringComparison.Ordinal);
+        Assert.Contains("```md", sharedContext, StringComparison.Ordinal);
+        Assert.Contains("## Notes", sharedContext, StringComparison.Ordinal);
+        Assert.DoesNotContain("- [ ] First task", sharedContext, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GetBodyWithoutFrontmatter_returns_full_prd_body()
+    {
+        var content = @"---
+engine: codex
+---
+# Shared context
+
+- [x] Done
+- [~] Review
+- [ ] Pending";
+        var doc = PrdParser.ParseContent(content);
+
+        var body = doc.GetBodyWithoutFrontmatter();
+
+        Assert.NotNull(body);
+        Assert.Contains("# Shared context", body, StringComparison.Ordinal);
+        Assert.Contains("- [x] Done", body, StringComparison.Ordinal);
+        Assert.Contains("- [~] Review", body, StringComparison.Ordinal);
+        Assert.Contains("- [ ] Pending", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("engine: codex", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Preserves_indentation()
     {
         var content = @"  - [ ] Indented task";

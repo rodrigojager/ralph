@@ -236,11 +236,18 @@ public sealed class AgentEngine : IEngine
                 else
                     args.Add("--full-auto");
             }
+            if (request.Fast)
+            {
+                args.Add("-c");
+                args.Add("service_tier=\"fast\"");
+                args.Add("-c");
+                args.Add("features.fast_mode=true");
+            }
             args.Add("--json");
             if (!HasCodexReasoningEffortOverride(passthrough))
             {
                 args.Add("-c");
-                args.Add("model_reasoning_effort=\"high\"");
+                args.Add(request.Fast ? "model_reasoning_effort=\"low\"" : "model_reasoning_effort=\"high\"");
             }
             args.Add("-");
         }

@@ -31,6 +31,7 @@ public sealed class RunLoopService
     private readonly RunReportWriter _reportWriter;
     private readonly EngineCommandResolver _commandResolver;
     private readonly EngineOutputDisplayAdapterRegistry _outputAdapterRegistry;
+    private readonly Dictionary<string, bool?> _codexModelAvailability = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Called after each engine run with (sessionInputTokens, sessionOutputTokens, latestTokenUsage).
@@ -86,7 +87,10 @@ public sealed class RunLoopService
         bool ignoreContextStops = true,
         string? noChangePolicyOverride = null,
         int? noChangeMaxAttemptsOverride = null,
-        bool? noChangeStopOnMaxAttemptsOverride = null)
+        bool? noChangeStopOnMaxAttemptsOverride = null,
+        bool noCommit = false,
+        bool fast = false,
+        PromptContextMode promptContextMode = PromptContextMode.LoopTaskScoped)
     {
         if (!_workspaceInit.IsInitialized(workingDirectory))
             _workspaceInit.Initialize(workingDirectory);
@@ -94,12 +98,12 @@ public sealed class RunLoopService
         var reportEntries = new List<RunReportTaskEntry>();
 
         // Resolve base branch once before the loop
-        if (branchPerTask && _git.IsGitRepo(workingDirectory))
+        if (branchPerTask && !noCommit && _git.IsGitRepo(workingDirectory))
         {
             baseBranch ??= _git.GetCurrentBranch(workingDirectory);
             if (verbose) _ui.WriteVerbose($"[verbose] Branch mode:  base={baseBranch}, createPr={createPr}, draft={draftPr}");
         }
-        else if (branchPerTask)
+        else if (branchPerTask && !noCommit)
         {
             _ui.WriteWarn(_s.Get("run.branch_mode_disabled"));
             branchPerTask = false;
@@ -191,7 +195,6 @@ public sealed class RunLoopService
             var noChangePolicy = ParseNoChangePolicy(noChangePolicyOverride ?? config.Run?.NoChangePolicy);
             var noChangeMaxAttempts = Math.Max(1, noChangeMaxAttemptsOverride ?? config.Run?.NoChangeMaxAttempts ?? 3);
             var noChangeStopOnMaxAttempts = noChangeStopOnMaxAttemptsOverride ?? config.Run?.NoChangeStopOnMaxAttempts ?? true;
-            var includeProgressContext = config.Run?.IncludeProgressContext ?? false;
             var engineNameToUse = engineName ?? doc.Frontmatter?.Engine ?? "cursor";
             var engineCandidates = BuildEngineCandidates(engineNameToUse, config);
             var activeEngineName = engineCandidates[0];
@@ -216,12 +219,8 @@ public sealed class RunLoopService
             _terminalView?.SetProgress(completedTasks + 1, totalTasks, taskEntry.DisplayText);
 
             var guardrails = File.Exists(guardrailsPath) ? File.ReadAllText(guardrailsPath) : null;
-            var progress = File.Exists(progressPath) ? File.ReadAllText(progressPath) : null;
             var cursorMode = activeEngineName.Equals("cursor", StringComparison.OrdinalIgnoreCase);
-            var context = PromptBuilder.BuildContext(
-                guardrails,
-                includeProgressContext && !cursorMode ? progress : null,
-                taskEntry.DisplayText);
+            var context = BuildPrdExecutionContext(doc, guardrails, taskEntry.DisplayText, promptContextMode);
             if (cursorMode)
                 context += "\n\n## Execution mode\nExecute the task now. Make the file changes directly and do not ask confirmation questions.";
 
@@ -233,6 +232,30 @@ public sealed class RunLoopService
             var browserCommand = doc.Frontmatter?.BrowserCommand;
             if (string.IsNullOrWhiteSpace(browserCommand) && config.Browser?.Enabled == true)
                 browserCommand = config.Browser.Command;
+            var fastModeForEngine = ResolveFastMode(activeEngineName, modelToUse, fast);
+            if (fast && !fastModeForEngine)
+                _ui.WriteWarn(_s.Format("run.fast_not_supported", activeEngineName, modelToUse ?? "(default)"));
+            var modelAvailability = await CheckCodexModelAvailabilityAsync(
+                workingDirectory,
+                activeEngineName,
+                modelToUse,
+                resolvedCommand,
+                cancellationToken);
+            if (modelAvailability == false)
+            {
+                _ui.WriteError(_s.Format("run.model_unavailable", activeEngineName, modelToUse));
+                AppendExecutionEvent(
+                    executionPath,
+                    "run_stopped",
+                    "model_unavailable",
+                    task: taskEntry.DisplayText,
+                    engine: activeEngineName,
+                    taskIndex: nextIndex.Value + 1,
+                    totalTasks: totalTasks,
+                    details: $"model={modelToUse}");
+                return new RunLoopResult { Completed = false };
+            }
+
             var normalizedExtraArgs = BuildExtraArgs(activeEngineName, maxTokensToUse, temperatureToUse, extraArgsPassthrough);
 
             var request = new EngineRequest
@@ -246,7 +269,8 @@ public sealed class RunLoopService
                 CommandPrefixArgs = resolvedCommand.PrefixArgs,
                 CommandResolutionSource = resolvedCommand.Source,
                 ModelOverride = modelToUse,
-                ExtraArgsPassthrough = normalizedExtraArgs
+                ExtraArgsPassthrough = normalizedExtraArgs,
+                Fast = fastModeForEngine
             };
 
             if (verbose)
@@ -340,6 +364,9 @@ public sealed class RunLoopService
                         var fallbackModel = modelOverride ?? doc.Frontmatter?.Model ?? engineConfig?.DefaultModel;
                         var fallbackMaxTokens = maxTokensOverride ?? engineConfig?.MaxTokens;
                         var fallbackTemperature = temperatureOverride ?? engineConfig?.Temperature;
+                        var fallbackFast = ResolveFastMode(fallbackName, fallbackModel, fast);
+                        if (fast && !fallbackFast)
+                            _ui.WriteWarn(_s.Format("run.fast_not_supported", fallbackName, fallbackModel ?? "(default)"));
                         request = new EngineRequest
                         {
                             WorkingDirectory = request.WorkingDirectory,
@@ -351,7 +378,8 @@ public sealed class RunLoopService
                             CommandPrefixArgs = fallbackResolvedCommand.PrefixArgs,
                             CommandResolutionSource = fallbackResolvedCommand.Source,
                             ModelOverride = fallbackModel,
-                            ExtraArgsPassthrough = BuildExtraArgs(activeEngineName, fallbackMaxTokens, fallbackTemperature, extraArgsPassthrough)
+                            ExtraArgsPassthrough = BuildExtraArgs(activeEngineName, fallbackMaxTokens, fallbackTemperature, extraArgsPassthrough),
+                            Fast = fallbackFast
                         };
                         _ui.WriteWarn(_s.Format("run.fallback_engine", activeEngineName));
                         continue;
@@ -566,7 +594,8 @@ public sealed class RunLoopService
                             CommandPrefixArgs = fallbackResolvedCommand.PrefixArgs,
                             CommandResolutionSource = fallbackResolvedCommand.Source,
                             ModelOverride = fallbackModel,
-                            ExtraArgsPassthrough = BuildExtraArgs(activeEngineName, fallbackMaxTokens, fallbackTemperature, extraArgsPassthrough)
+                            ExtraArgsPassthrough = BuildExtraArgs(activeEngineName, fallbackMaxTokens, fallbackTemperature, extraArgsPassthrough),
+                            Fast = fast
                         };
                         _ui.WriteWarn(_s.Format("run.fallback_engine", activeEngineName));
                         attempt = 0;
@@ -824,7 +853,7 @@ public sealed class RunLoopService
             _terminalView?.SetProgress(completedTasks + 1, totalTasks, taskEntry.DisplayText);
 
             // Git: commit + push + PR after task completes
-            if (branchPerTask && taskBranch != null)
+            if (branchPerTask && !noCommit && taskBranch != null)
             {
                 var commitMsg = $"ralph: task {nextIndex.Value + 1} - {taskEntry.DisplayText}";
                 _terminalView?.SetStatus(_s.Get("run.status_committing"));
@@ -1023,7 +1052,10 @@ public sealed class RunLoopService
         bool ignoreContextStops = true,
         string? noChangePolicyOverride = null,
         int? noChangeMaxAttemptsOverride = null,
-        bool? noChangeStopOnMaxAttemptsOverride = null)
+        bool? noChangeStopOnMaxAttemptsOverride = null,
+        bool noCommit = false,
+        bool fast = false,
+        PromptContextMode promptContextMode = PromptContextMode.LoopTaskScoped)
     {
         return await RunAsync(
             workingDirectory,
@@ -1047,7 +1079,10 @@ public sealed class RunLoopService
             ignoreContextStops,
             noChangePolicyOverride,
             noChangeMaxAttemptsOverride,
-            noChangeStopOnMaxAttemptsOverride);
+            noChangeStopOnMaxAttemptsOverride,
+            noCommit,
+            fast,
+            promptContextMode);
     }
 
     public async Task<RunLoopResult> RunSingleTaskAsync(
@@ -1060,7 +1095,8 @@ public sealed class RunLoopService
         IReadOnlyList<string>? extraArgsPassthrough = null,
         CancellationToken cancellationToken = default,
         bool verbose = false,
-        bool debugEngineJson = false)
+        bool debugEngineJson = false,
+        bool fast = false)
     {
         var executionPath = _workspaceInit.GetExecutionLogPath(workingDirectory);
         Directory.CreateDirectory(_workspaceInit.GetRalphDir(workingDirectory));
@@ -1093,11 +1129,32 @@ public sealed class RunLoopService
         var resolvedCommand = _commandResolver.ResolveForExecution(activeEngineName, config);
         var modelToUse = modelOverride ?? engineConfig?.DefaultModel;
         var maxTokensToUse = maxTokensOverride ?? engineConfig?.MaxTokens;
+        var fastModeForEngine = ResolveFastMode(activeEngineName, modelToUse, fast);
+        if (fast && !fastModeForEngine)
+            _ui.WriteWarn(_s.Format("run.fast_not_supported", activeEngineName, modelToUse ?? "(default)"));
         var normalizedExtraArgs = BuildExtraArgs(activeEngineName, maxTokensToUse, null, extraArgsPassthrough);
+        var modelAvailability = await CheckCodexModelAvailabilityAsync(
+            workingDirectory,
+            activeEngineName,
+            modelToUse,
+            resolvedCommand,
+            cancellationToken);
+        if (modelAvailability == false)
+        {
+            _ui.WriteError(_s.Format("run.model_unavailable", activeEngineName, modelToUse));
+            AppendExecutionEvent(
+                executionPath,
+                "run_stopped",
+                "model_unavailable",
+                task: taskText,
+                engine: activeEngineName,
+                details: $"model={modelToUse}");
+            return new RunLoopResult { Completed = false };
+        }
 
         var guardrailsPath = _workspaceInit.GetGuardrailsPath(workingDirectory);
         var guardrails = File.Exists(guardrailsPath) ? File.ReadAllText(guardrailsPath) : null;
-        var context = PromptBuilder.BuildContext(guardrails, null, taskText);
+        var context = PromptBuilder.BuildLoopContext(guardrails, null, taskText);
         if (activeEngineName.Equals("cursor", StringComparison.OrdinalIgnoreCase))
             context += "\n\n## Execution mode\nExecute the task now. Do not ask for confirmation questions.";
 
@@ -1120,11 +1177,12 @@ public sealed class RunLoopService
             GuardrailsPath = guardrailsPath,
             ProgressPath = null,
             CommandOverride = resolvedCommand.Executable,
-            CommandPrefixArgs = resolvedCommand.PrefixArgs,
-            CommandResolutionSource = resolvedCommand.Source,
-            ModelOverride = modelToUse,
-            ExtraArgsPassthrough = normalizedExtraArgs
-        };
+                CommandPrefixArgs = resolvedCommand.PrefixArgs,
+                CommandResolutionSource = resolvedCommand.Source,
+                ModelOverride = modelToUse,
+                ExtraArgsPassthrough = normalizedExtraArgs,
+                Fast = fastModeForEngine
+            };
 
         var result = await activeEngine.RunAsync(request, cancellationToken);
         WriteEngineDebugSnapshot(
@@ -1146,6 +1204,9 @@ public sealed class RunLoopService
                 var fallbackResolved = _commandResolver.ResolveForExecution(fallbackName, config);
                 var fallbackModel = modelOverride ?? fallbackConfig?.DefaultModel;
                 var fallbackMaxTokens = maxTokensOverride ?? fallbackConfig?.MaxTokens;
+                var fallbackFast = ResolveFastMode(fallbackName, fallbackModel, fast);
+                if (fast && !fallbackFast)
+                    _ui.WriteWarn(_s.Format("run.fast_not_supported", fallbackName, fallbackModel ?? "(default)"));
                 var fallbackArgs = BuildExtraArgs(fallbackName, fallbackMaxTokens, null, extraArgsPassthrough);
                 request = new EngineRequest
                 {
@@ -1158,7 +1219,8 @@ public sealed class RunLoopService
                     CommandPrefixArgs = fallbackResolved.PrefixArgs,
                     CommandResolutionSource = fallbackResolved.Source,
                     ModelOverride = fallbackModel,
-                    ExtraArgsPassthrough = fallbackArgs
+                    ExtraArgsPassthrough = fallbackArgs,
+                    Fast = fallbackFast
                 };
                 _ui.WriteWarn(_s.Format("run.fallback_engine", fallbackName));
                 result = await fallbackEngine.RunAsync(request, cancellationToken);
@@ -1317,6 +1379,155 @@ public sealed class RunLoopService
         catch
         {
             return false;
+        }
+    }
+
+    private static readonly IReadOnlyList<string[]> _codexModelProbeCommands = new[]
+    {
+        new[] { "--help" },
+        new[] { "help" },
+        new[] { "models" },
+        new[] { "model", "list" },
+        new[] { "models", "list" },
+        new[] { "--list-models" },
+        new[] { "list-models" },
+        new[] { "--version" }
+    };
+
+    private static string BuildModelAvailabilityCacheKey(ResolvedEngineCommand command, string? model)
+    {
+        var prefix = command.PrefixArgs.Count == 0
+            ? string.Empty
+            : string.Join(" ", command.PrefixArgs);
+        return $"{command.Executable}||{prefix}||{model}";
+    }
+
+    private async Task<bool?> CheckCodexModelAvailabilityAsync(
+        string workingDirectory,
+        string engineName,
+        string? model,
+        ResolvedEngineCommand resolvedCommand,
+        CancellationToken cancellationToken)
+    {
+        if (!engineName.Equals("codex", StringComparison.OrdinalIgnoreCase))
+            return null;
+        if (string.IsNullOrWhiteSpace(model))
+            return null;
+
+        var key = BuildModelAvailabilityCacheKey(resolvedCommand, model);
+        if (_codexModelAvailability.TryGetValue(key, out var cached))
+            return cached;
+
+        foreach (var probe in _codexModelProbeCommands)
+        {
+            var probeOutput = await RunCommandAndCaptureOutputAsync(
+                workingDirectory,
+                resolvedCommand.Executable,
+                resolvedCommand.PrefixArgs,
+                probe,
+                cancellationToken);
+            if (string.IsNullOrWhiteSpace(probeOutput))
+                continue;
+
+            if (IsModelUnavailableResponse(probeOutput, model))
+            {
+                _codexModelAvailability[key] = false;
+                return false;
+            }
+
+            if (HasModelInOutput(probeOutput, model))
+            {
+                _codexModelAvailability[key] = true;
+                return true;
+            }
+        }
+
+        _codexModelAvailability[key] = null;
+        return null;
+    }
+
+    private static bool HasModelInOutput(string output, string model)
+    {
+        if (string.IsNullOrWhiteSpace(model))
+            return false;
+
+        foreach (var line in output.Split('\n'))
+        {
+            if (line.IndexOf(model, StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+        }
+        return false;
+    }
+
+    private static bool IsModelUnavailableResponse(string output, string model)
+    {
+        if (string.IsNullOrWhiteSpace(output) || string.IsNullOrWhiteSpace(model))
+            return false;
+
+        var candidateLines = output.Replace('\r', '\n').Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        foreach (var line in candidateLines)
+        {
+            if (line.IndexOf("model", StringComparison.OrdinalIgnoreCase) < 0)
+                continue;
+
+            if (line.IndexOf("not found", StringComparison.OrdinalIgnoreCase) >= 0
+                || line.IndexOf("unknown", StringComparison.OrdinalIgnoreCase) >= 0
+                || line.IndexOf("invalid", StringComparison.OrdinalIgnoreCase) >= 0
+                || line.IndexOf("unsupported", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                if (line.IndexOf(model, StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static async Task<string?> RunCommandAndCaptureOutputAsync(
+        string workingDirectory,
+        string fileName,
+        IReadOnlyList<string> prefixArgs,
+        IReadOnlyList<string> args,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var process = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = fileName,
+                    WorkingDirectory = workingDirectory,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }
+            };
+            foreach (var token in prefixArgs)
+                process.StartInfo.ArgumentList.Add(token);
+            foreach (var token in args)
+                process.StartInfo.ArgumentList.Add(token);
+
+            if (!process.Start())
+                return null;
+
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(TimeSpan.FromMilliseconds(3000));
+            var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+            await process.WaitForExitAsync(cts.Token);
+            var output = await outputTask;
+            var error = await errorTask;
+            return $"{output}{Environment.NewLine}{error}";
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -1550,6 +1761,39 @@ public sealed class RunLoopService
         if (!maxTotalTokensPerRun.HasValue || maxTotalTokensPerRun.Value <= 0)
             return false;
         return (inputTokens + outputTokens) >= maxTotalTokensPerRun.Value;
+    }
+
+    private static bool ResolveFastMode(string engineName, string? modelOverride, bool fastRequested)
+    {
+        if (!fastRequested)
+            return false;
+
+        if (!engineName.Equals("codex", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (string.IsNullOrWhiteSpace(modelOverride))
+            return true;
+
+        return modelOverride.StartsWith("gpt-", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string BuildPrdExecutionContext(
+        PrdDocument doc,
+        string? guardrails,
+        string taskText,
+        PromptContextMode promptContextMode)
+    {
+        return promptContextMode switch
+        {
+            PromptContextMode.WiggumFullPrd => PromptBuilder.BuildWiggumContext(
+                guardrails,
+                doc.GetBodyWithoutFrontmatter(),
+                taskText),
+            _ => PromptBuilder.BuildLoopContext(
+                guardrails,
+                doc.GetSharedContext(),
+                taskText)
+        };
     }
 
     private static ContextSignal DetectContextSignal(string? stdout, string? stderr)

@@ -88,6 +88,26 @@ while (existem tarefas não concluídas):
 
 Cada execução resolve **apenas uma task**.
 
+## Contexto lido em cada modo
+
+O Ralph CLI diferencia explicitamente os modos `loop` e `wiggum` na montagem do prompt.
+
+- `loop`:
+  lê apenas o contexto comum do PRD, os guardrails e a próxima tarefa pendente.
+- `loop`:
+  o contexto comum significa tudo que aparece antes da primeira linha de tarefa no `PRD.md`, incluindo quantos blocos, seções, notas e exemplos existirem.
+- `loop`:
+  ignora tarefas futuras e também ignora tarefas já marcadas com `- [x]` ou `- [~]`.
+- `wiggum`:
+  lê o corpo completo do PRD em toda tentativa da tarefa ativa, além dos guardrails.
+
+Em termos práticos:
+
+- `loop`:
+  `contexto comum do PRD + guardrails + current task`
+- `wiggum`:
+  `PRD completo + guardrails + active task`
+
 ---
 
 ## Por que isso é importante?
@@ -207,6 +227,9 @@ ralph once "Implementar endpoint /health"
 - `ralph init` inicializa `.ralph/`.
 - `ralph run` executa loop completo de tarefas.
 - `ralph loop` alias para `run`.
+- `ralph run --loop` usa contexto enxuto por tarefa: contexto comum do PRD + guardrails + tarefa atual.
+- `ralph run --wiggum` usa contexto completo: PRD inteiro + guardrails + tarefa ativa.
+- `ralph run --fast --engine codex --model gpt-5.4` ativa o fast mode do Codex via configuração compatível com o CLI atual.
 - `ralph once` executa uma tarefa.
 - `ralph parallel` executa tarefas em paralelo.
 - `ralph tasks list|next|done|sync` gerencia/sincroniza tarefas.
@@ -221,6 +244,27 @@ ralph once "Implementar endpoint /health"
 - `ralph ui current|set|toggle` gerencia UI.
 
 Use `ralph --help` para todas as flags atuais.
+
+## Fast mode do Codex
+
+Quando a engine é `codex` e o modelo é compatível com GPT, `--fast` não injeta um argumento legado `codex --fast`.
+
+Em vez disso, o Ralph aplica o fast mode do Codex via configuração:
+
+- `service_tier="fast"`
+- `features.fast_mode=true`
+
+Comportamento padrão:
+
+- `codex` + `gpt-*` + `--fast`: ativa fast mode e, se você não sobrescrever manualmente, usa `model_reasoning_effort="low"`.
+- `codex` + `gpt-*` sem `--fast`: roda no modo normal e usa `model_reasoning_effort="high"` por padrão.
+- outras engines ou modelos não compatíveis: `--fast` é ignorado com aviso, sem quebrar a execução.
+
+Se quiser manter fast mode com um reasoning explícito, passe o override diretamente para a engine:
+
+```bash
+ralph run --engine codex --model gpt-5.4 --fast -- --config model_reasoning_effort=\"high\"
+```
 
 ## Atualização e idiomas
 

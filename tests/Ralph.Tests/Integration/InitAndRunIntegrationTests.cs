@@ -66,6 +66,111 @@ public class InitAndRunIntegrationTests
     }
 
     [Fact]
+    public async Task Run_includes_shared_prd_context_on_every_task_and_skips_resolved_items()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "RalphIntegration_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            var prdPath = Path.Combine(dir, "PRD.md");
+            File.WriteAllText(prdPath, @"# Shared context
+
+Respect architectural boundaries.
+Do not bypass validation rules.
+
+- [x] Already done
+- [~] Needs review
+- [ ] First pending
+- [ ] Second pending");
+            var init = new WorkspaceInitializer();
+            init.Initialize(dir);
+            var registry = new EngineRegistry();
+            var prompts = new List<string>();
+            var writes = 0;
+            registry.Register(new FakeEngine("fake", (req, _) =>
+            {
+                prompts.Add(req.TaskText);
+                writes++;
+                File.WriteAllText(Path.Combine(req.WorkingDirectory, $"created-{writes}.txt"), "ok");
+                return Task.FromResult(new EngineResult { ExitCode = 0, CompletionSignal = CompletionSignal.Complete });
+            }));
+            var runLoop = new RunLoopService(registry, new StateStore(), init, new ConsoleInteraction());
+
+            var result = await runLoop.RunAsync(dir, prdPath, maxIterations: 2, skipTests: true, engineName: "fake");
+
+            Assert.True(result.Completed);
+            Assert.Equal(2, prompts.Count);
+
+            Assert.All(prompts, prompt =>
+            {
+                Assert.Contains("## PRD context", prompt, StringComparison.Ordinal);
+                Assert.Contains("Respect architectural boundaries.", prompt, StringComparison.Ordinal);
+                Assert.Contains("Do not bypass validation rules.", prompt, StringComparison.Ordinal);
+                Assert.DoesNotContain("Already done", prompt, StringComparison.Ordinal);
+                Assert.DoesNotContain("Needs review", prompt, StringComparison.Ordinal);
+            });
+
+            Assert.Contains("## Current task\nFirst pending", prompts[0], StringComparison.Ordinal);
+            Assert.DoesNotContain("Second pending", prompts[0], StringComparison.Ordinal);
+            Assert.Contains("## Current task\nSecond pending", prompts[1], StringComparison.Ordinal);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task Wiggum_mode_uses_full_prd_context()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "RalphIntegration_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            var prdPath = Path.Combine(dir, "PRD.md");
+            File.WriteAllText(prdPath, @"# Shared context
+
+Global rule.
+
+- [x] Done task
+- [~] Review task
+- [ ] Active task");
+            var init = new WorkspaceInitializer();
+            init.Initialize(dir);
+            var registry = new EngineRegistry();
+            var prompts = new List<string>();
+            registry.Register(new FakeEngine("fake", (req, _) =>
+            {
+                prompts.Add(req.TaskText);
+                File.WriteAllText(Path.Combine(req.WorkingDirectory, "created.txt"), "ok");
+                return Task.FromResult(new EngineResult { ExitCode = 0, CompletionSignal = CompletionSignal.Complete });
+            }));
+            var runLoop = new RunLoopService(registry, new StateStore(), init, new ConsoleInteraction());
+
+            var result = await runLoop.RunAsync(
+                dir,
+                prdPath,
+                maxIterations: 1,
+                skipTests: true,
+                engineName: "fake",
+                promptContextMode: PromptContextMode.WiggumFullPrd);
+
+            Assert.True(result.Completed);
+            Assert.Single(prompts);
+            Assert.Contains("## Full PRD", prompts[0], StringComparison.Ordinal);
+            Assert.Contains("Global rule.", prompts[0], StringComparison.Ordinal);
+            Assert.Contains("- [x] Done task", prompts[0], StringComparison.Ordinal);
+            Assert.Contains("- [~] Review task", prompts[0], StringComparison.Ordinal);
+            Assert.Contains("- [ ] Active task", prompts[0], StringComparison.Ordinal);
+            Assert.Contains("## Active task\nActive task", prompts[0], StringComparison.Ordinal);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task Run_does_not_mark_task_if_engine_makes_no_changes()
     {
         var dir = Path.Combine(Path.GetTempPath(), "RalphIntegration_" + Guid.NewGuid().ToString("N"));

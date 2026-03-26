@@ -81,6 +81,41 @@ public class EngineArgsTokenizationTests
         Assert.DoesNotContain("model_reasoning_effort=\"high\"", args);
     }
 
+    [Fact]
+    public void CodexEngine_BuildArgs_EnablesFastModeViaConfig_WhenRequested()
+    {
+        var engine = new AgentEngine("codex", "codex");
+        var args = BuildArgs(engine, new EngineRequest
+        {
+            WorkingDirectory = ".",
+            TaskText = "hello world",
+            Fast = true
+        });
+
+        Assert.Contains("service_tier=\"fast\"", args);
+        Assert.Contains("features.fast_mode=true", args);
+        Assert.Contains("model_reasoning_effort=\"low\"", args);
+        Assert.DoesNotContain("model_reasoning_effort=\"high\"", args);
+    }
+
+    [Fact]
+    public void CodexEngine_BuildArgs_DoesNotDuplicateFastReasoningEffortOverride_WhenProvided()
+    {
+        var engine = new AgentEngine("codex", "codex");
+        var args = BuildArgs(engine, new EngineRequest
+        {
+            WorkingDirectory = ".",
+            TaskText = "hello world",
+            Fast = true,
+            ExtraArgsPassthrough = new[] { "-c", "model_reasoning_effort=\"high\"" }
+        });
+
+        Assert.Contains("service_tier=\"fast\"", args);
+        Assert.Contains("features.fast_mode=true", args);
+        Assert.Contains("model_reasoning_effort=\"high\"", args);
+        Assert.DoesNotContain("model_reasoning_effort=\"low\"", args);
+    }
+
     private static List<string> BuildArgs(AgentEngine engine, EngineRequest request)
     {
         var method = typeof(AgentEngine).GetMethod("BuildArgs", BindingFlags.NonPublic | BindingFlags.Instance);

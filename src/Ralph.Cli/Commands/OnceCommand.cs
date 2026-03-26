@@ -34,6 +34,8 @@ public sealed class OnceCommand
         string? noChangePolicyOverride = null,
         int? noChangeMaxAttemptsOverride = null,
         bool? noChangeStopOnMaxAttemptsOverride = null,
+        bool noCommit = false,
+        bool fast = false,
         CancellationToken cancellationToken = default)
     {
         if (dryRun)
@@ -70,7 +72,8 @@ public sealed class OnceCommand
                 extraArgs,
                 cancellationToken,
                 verbose,
-                debugEngineJson);
+                debugEngineJson,
+                fast);
             return brownfieldResult.Completed ? 0 : 1;
         }
 
@@ -95,7 +98,9 @@ public sealed class OnceCommand
             ignoreContextStops,
             noChangePolicyOverride,
             noChangeMaxAttemptsOverride,
-            noChangeStopOnMaxAttemptsOverride);
+            noChangeStopOnMaxAttemptsOverride,
+            noCommit,
+            fast);
         return result.Completed ? 0 : (result.Gutter ? 2 : 1);
     }
 }

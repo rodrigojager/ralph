@@ -1,4 +1,6 @@
 using Ralph.Cli.Commands;
+using Ralph.Cli.Infrastructure;
+using System.Diagnostics;
 using Ralph.Core.Config;
 using Ralph.Core.Localization;
 using Ralph.Core.RunLoop;
@@ -8,6 +10,7 @@ using Ralph.Engines.Registry;
 using Ralph.Persistence.Config;
 using Ralph.Persistence.State;
 using Ralph.Persistence.Workspace;
+using Ralph.Tasks.Prd;
 using Ralph.UI.Abstractions;
 using Ralph.UI.Console;
 using Ralph.UI.Tui;
@@ -58,6 +61,8 @@ var runMode = RunCommandMode.Loop;
 var runModeWasSet = false;
 var runModeSetBy = (string?)null;
 var force = false;
+var runPersistent = true;
+var workerRun = false;
 var noCommit = false;
 var fast = false;
 var yes = false;
@@ -160,6 +165,8 @@ while (i < argsList.Count)
         continue;
     }
     if (a == "--fast")   { fast = true; i++; continue; }
+    if (a == "--worker-run") { workerRun = true; i++; continue; }
+    if (a == "--fail-fast") { runPersistent = false; i++; continue; }
     if (a == "--mode" && i + 1 < argsList.Count)
     {
         var value = argsList[i + 1].Trim().ToLowerInvariant();
@@ -282,7 +289,7 @@ while (i < argsList.Count)
     }
     if (a == "--create-pr") { createPr = true; i++; continue; }
     if (a == "--draft-pr")  { draftPr = true; createPr = true; i++; continue; }
-    if (a == "--force")  { force = true; i++; continue; }
+    if (a == "--force")  { force = true; runPersistent = true; i++; continue; }
     if (a == "--yes" || a == "-y") { yes = true; i++; continue; }
     if (a == "--non-interactive") { nonInteractive = true; i++; continue; }
     if (a == "--processes") { doctorProcesses = true; i++; continue; }
@@ -718,13 +725,23 @@ try
             return 1;
         }
 
+        if (command == "run" && !workerRun)
+        {
+            return await RunSupervisedRunAsync(
+                rawArgs: args,
+                workingDirectory: cwd,
+                prdPath: prdPath,
+                workspaceInit: workspaceInit,
+                cancellationToken: cancellation.Token);
+        }
+
         if (tuiDashboard != null)
         {
             // TUI path: start the command on the thread pool so its synchronous
             // startup code does NOT write to the console before Terminal.Gui takes
             // over. Then run Terminal.Gui blocking on the MAIN THREAD.
             var cmdTask = command == "run"
-                ? Task.Run(() => runCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, maxRetries, retryDelaySeconds, maxIterations: maxIterations, dryRun: dryRun, verbose: verbose, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, mode: runMode, force: force, noCommit: noCommit, fast: fast, cancellationToken: cancellation.Token))
+                ? Task.Run(() => runCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, maxRetries, retryDelaySeconds, maxIterations: maxIterations, dryRun: dryRun, verbose: verbose, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, mode: runMode, force: runPersistent, noCommit: noCommit, fast: fast, cancellationToken: cancellation.Token))
                 : Task.Run(() => onceCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, dryRun: dryRun, verbose: verbose, taskOverride: inlineTask, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, noCommit: noCommit, fast: fast, cancellationToken: cancellation.Token));
 
             tuiDashboard.MonitoredTask = cmdTask;
@@ -743,7 +760,7 @@ try
 
         // Non-TUI path: direct async execution.
         if (command == "run")
-            return await runCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, maxRetries, retryDelaySeconds, maxIterations: maxIterations, dryRun: dryRun, verbose: verbose, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, mode: runMode, force: force, noCommit: noCommit, fast: fast, cancellationToken: cancellation.Token);
+            return await runCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, maxRetries, retryDelaySeconds, maxIterations: maxIterations, dryRun: dryRun, verbose: verbose, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, mode: runMode, force: runPersistent, noCommit: noCommit, fast: fast, cancellationToken: cancellation.Token);
 
         if (inlineTask != null)
             return await onceCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, dryRun: dryRun, verbose: verbose, taskOverride: inlineTask, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, noCommit: noCommit, fast: fast, cancellationToken: cancellation.Token);
@@ -793,6 +810,91 @@ static void PrintHelp(IStringCatalog s)
     Console.WriteLine(s.Get("help.full"));
 }
 
+static async Task<int> RunSupervisedRunAsync(
+    string[] rawArgs,
+    string workingDirectory,
+    string prdPath,
+    WorkspaceInitializer workspaceInit,
+    CancellationToken cancellationToken)
+{
+    const int maxCrashRetriesPerTask = 3;
+    var crashCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+
+    while (true)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var before = ReadPendingTaskState(prdPath);
+        if (before.PendingIndex is null)
+            return 0;
+
+        var childArgs = BuildWorkerArguments(rawArgs);
+        var startInfo = BuildSelfStartInfo(workingDirectory, childArgs);
+        if (startInfo is null)
+            throw new InvalidOperationException("Unable to resolve the current ralph executable for supervised run.");
+
+        using var child = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Unable to start supervised ralph worker process.");
+
+        using var cancelRegistration = cancellationToken.Register(() =>
+        {
+            try
+            {
+                if (!child.HasExited)
+                    child.Kill(entireProcessTree: true);
+            }
+            catch
+            {
+                // best effort
+            }
+        });
+
+        await child.WaitForExitAsync(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var after = ReadPendingTaskState(prdPath);
+        if (after.PendingIndex is null)
+            return 0;
+
+        if (HasPendingProgress(before, after))
+        {
+            crashCounts.Clear();
+            continue;
+        }
+
+        if (child.ExitCode == 130)
+            return 130;
+
+        var state = TryReadRalphState(workspaceInit.GetStatePath(workingDirectory));
+        var taskKey = BuildCrashTaskKey(before, after, state);
+        var crashCount = crashCounts.TryGetValue(taskKey, out var existing) ? existing + 1 : 1;
+        crashCounts[taskKey] = crashCount;
+
+        TryAppendExecutionLog(
+            workspaceInit,
+            workingDirectory,
+            "run",
+            "worker_restarting",
+            $"exit_code={child.ExitCode};task={SanitizeLogValue(taskKey)};attempt={crashCount}");
+
+        if (crashCount >= maxCrashRetriesPerTask)
+        {
+            MarkCurrentTaskSkippedForReview(prdPath, before, after, state);
+            crashCounts.Remove(taskKey);
+            TryAppendExecutionLog(
+                workspaceInit,
+                workingDirectory,
+                "run",
+                "worker_marked_review",
+                $"task={SanitizeLogValue(taskKey)}");
+        }
+        else
+        {
+            await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
+        }
+    }
+}
+
 static void TryAppendExecutionLog(WorkspaceInitializer workspaceInit, string cwd, string? command, string eventName, string reason, string? details = null)
 {
     if (command is not ("run" or "once" or "parallel"))
@@ -818,6 +920,117 @@ static void TryAppendExecutionLog(WorkspaceInitializer workspaceInit, string cwd
     {
         // Do not mask the original exception/cancellation.
     }
+}
+
+static ProcessStartInfo? BuildSelfStartInfo(string workingDirectory, IReadOnlyList<string> childArgs)
+{
+    var hostPath = CurrentExecutableLocator.Resolve(baseDirectory: AppContext.BaseDirectory);
+    if (string.IsNullOrWhiteSpace(hostPath))
+        return null;
+
+    var startInfo = new ProcessStartInfo
+    {
+        WorkingDirectory = workingDirectory,
+        RedirectStandardOutput = false,
+        RedirectStandardError = false,
+        RedirectStandardInput = false,
+        UseShellExecute = false
+    };
+
+    if (hostPath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+    {
+        startInfo.FileName = "dotnet";
+        startInfo.ArgumentList.Add(hostPath);
+    }
+    else
+    {
+        startInfo.FileName = hostPath;
+    }
+
+    foreach (var arg in childArgs)
+        startInfo.ArgumentList.Add(arg);
+
+    return startInfo;
+}
+
+static List<string> BuildWorkerArguments(string[] rawArgs)
+{
+    var args = rawArgs
+        .Where(a => !string.Equals(a, "--worker-run", StringComparison.OrdinalIgnoreCase))
+        .ToList();
+
+    var passthroughIndex = args.FindIndex(a => a == "--");
+    if (passthroughIndex >= 0)
+        args.Insert(passthroughIndex, "--worker-run");
+    else
+        args.Add("--worker-run");
+
+    return args;
+}
+
+static (PrdDocument Document, int? PendingIndex) ReadPendingTaskState(string prdPath)
+{
+    var doc = PrdParser.Parse(prdPath);
+    return (doc, doc.GetNextPendingTaskIndex());
+}
+
+static bool HasPendingProgress((PrdDocument Document, int? PendingIndex) before, (PrdDocument Document, int? PendingIndex) after)
+{
+    if (before.PendingIndex is null && after.PendingIndex is null)
+        return true;
+
+    if (before.PendingIndex.HasValue != after.PendingIndex.HasValue)
+        return true;
+
+    if (before.PendingIndex.HasValue && after.PendingIndex.HasValue)
+        return before.PendingIndex.Value != after.PendingIndex.Value;
+
+    return false;
+}
+
+static RalphState? TryReadRalphState(string statePath)
+{
+    try
+    {
+        if (!File.Exists(statePath))
+            return null;
+
+        var json = File.ReadAllText(statePath);
+        return System.Text.Json.JsonSerializer.Deserialize<RalphState>(json);
+    }
+    catch
+    {
+        return null;
+    }
+}
+
+static string BuildCrashTaskKey((PrdDocument Document, int? PendingIndex) before, (PrdDocument Document, int? PendingIndex) after, RalphState? state)
+{
+    var index = state?.CurrentTaskIndex ?? before.PendingIndex ?? after.PendingIndex ?? -1;
+    var text =
+        state?.CurrentTaskText
+        ?? (before.PendingIndex.HasValue ? before.Document.TaskEntries[before.PendingIndex.Value].DisplayText : null)
+        ?? (after.PendingIndex.HasValue ? after.Document.TaskEntries[after.PendingIndex.Value].DisplayText : null)
+        ?? "unknown-task";
+
+    return $"{index}:{text}";
+}
+
+static void MarkCurrentTaskSkippedForReview(
+    string prdPath,
+    (PrdDocument Document, int? PendingIndex) before,
+    (PrdDocument Document, int? PendingIndex) after,
+    RalphState? state)
+{
+    var doc = PrdParser.Parse(prdPath);
+    var candidateIndex = state?.CurrentTaskIndex;
+    if (candidateIndex is null || candidateIndex < 0 || candidateIndex >= doc.TaskEntries.Count || !doc.TaskEntries[candidateIndex.Value].IsPending)
+        candidateIndex = before.PendingIndex ?? after.PendingIndex;
+
+    if (candidateIndex is null)
+        return;
+
+    PrdWriter.MarkTaskSkippedForReview(prdPath, doc, candidateIndex.Value);
 }
 
 static string SanitizeLogValue(string value) =>

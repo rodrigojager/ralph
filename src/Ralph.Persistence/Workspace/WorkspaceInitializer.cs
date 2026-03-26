@@ -12,6 +12,7 @@ public sealed class WorkspaceInitializer
     public const string ExecutionLogFileName = "execution.log";
     public const string TuiDebugLogFileName = "tui-debug.log";
     public const string StateFileName = "state.json";
+    public const string HeartbeatFileName = "heartbeat.json";
     public const string IterationFileName = ".iteration";
     public const string ConfigFileName = "config.json";
     public const string ReportsDirName = "reports";
@@ -41,6 +42,9 @@ public sealed class WorkspaceInitializer
 
     public string GetStatePath(string workingDirectory) =>
         Path.Combine(GetRalphDir(workingDirectory), StateFileName);
+
+    public string GetHeartbeatPath(string workingDirectory) =>
+        Path.Combine(GetRalphDir(workingDirectory), HeartbeatFileName);
 
     public string GetIterationPath(string workingDirectory) =>
         Path.Combine(GetRalphDir(workingDirectory), IterationFileName);
@@ -74,6 +78,7 @@ public sealed class WorkspaceInitializer
         WriteIfMissing(GetExecutionLogPath(workingDirectory), "");
         WriteIfMissing(GetTuiDebugLogPath(workingDirectory), "");
         WriteIfMissing(GetStatePath(workingDirectory), "{\"iteration\":0,\"retries\":0}\n");
+        WriteIfMissing(GetHeartbeatPath(workingDirectory), "{}\n");
         WriteIfMissing(GetIterationPath(workingDirectory), "0");
         WriteIfMissing(GetConfigPath(workingDirectory), GetDefaultConfigContent());
         WriteIfMissing(GetPrdPath(workingDirectory), GetDefaultPrdContent());
@@ -91,6 +96,7 @@ public sealed class WorkspaceInitializer
         WriteIfMissing(GetExecutionLogPath(workingDirectory), "");
         WriteIfMissing(GetTuiDebugLogPath(workingDirectory), "");
         WriteIfMissing(GetStatePath(workingDirectory), "{\"iteration\":0,\"retries\":0}\n");
+        WriteIfMissing(GetHeartbeatPath(workingDirectory), "{}\n");
         WriteIfMissing(GetIterationPath(workingDirectory), "0");
         WriteIfMissing(GetConfigPath(workingDirectory), GetDefaultConfigContent());
         WriteIfMissing(GetPrdPath(workingDirectory), GetDefaultPrdContent());

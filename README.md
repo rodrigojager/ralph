@@ -266,6 +266,23 @@ Se quiser manter fast mode com um reasoning explícito, passe o override diretam
 ralph run --engine codex --model gpt-5.4 --fast -- --config model_reasoning_effort=\"high\"
 ```
 
+## Resiliencia operacional
+
+O Ralph agora persiste estado de tarefa em andamento logo no `task_started` e atualiza um heartbeat duravel em `.ralph/heartbeat.json` durante a execucao. Isso melhora tres cenarios operacionais importantes:
+
+- retomada mais confiavel quando o processo morre no meio da tarefa
+- deteccao explicita de `unexpected shutdown` no proximo boot
+- observabilidade externa por supervisor sem depender apenas de `tmux`
+
+Arquivos relevantes:
+
+- `.ralph/state.json`
+- `.ralph/heartbeat.json`
+- `.ralph/execution.log`
+- `.ralph/reports/latest.md`
+
+Por padrao, `ralph run` supervisiona um worker interno e continua tentando ate o PRD avancar. Se o worker cair sem progresso, o supervisor relanca a execucao e, apos quedas repetidas na mesma tarefa, marca essa tarefa como `[~]` para revisao manual e segue para a proxima. Use `--fail-fast` apenas quando quiser desabilitar esse comportamento resiliente.
+
 ## Atualização e idiomas
 
 - `ralph update`:

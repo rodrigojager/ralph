@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Ralph.Core.Git;
 using Ralph.Core.Localization;
 using Ralph.Core.Prompting;
@@ -119,11 +120,15 @@ public sealed class RunLoopService
         }
 
         var statePath = _workspaceInit.GetStatePath(workingDirectory);
+        var heartbeatPath = _workspaceInit.GetHeartbeatPath(workingDirectory);
         var guardrailsPath = _workspaceInit.GetGuardrailsPath(workingDirectory);
         var progressPath = _workspaceInit.GetProgressPath(workingDirectory);
         var activityPath = _workspaceInit.GetActivityLogPath(workingDirectory);
         var errorsPath = _workspaceInit.GetErrorsLogPath(workingDirectory);
         var executionPath = _workspaceInit.GetExecutionLogPath(workingDirectory);
+        DetectUnexpectedShutdown(statePath, errorsPath, executionPath);
+        MarkRunState(statePath, heartbeatPath, runStartedAt, "running", "begin");
+
         AppendExecutionEvent(
             executionPath,
             "run_started",
@@ -156,6 +161,7 @@ public sealed class RunLoopService
                     "run_finished",
                     "all_tasks_completed",
                     details: $"iterations={iteration}");
+                MarkRunStopped(statePath, heartbeatPath, "all_tasks_completed");
                 var done = new RunLoopResult { Completed = true };
                 WriteRunReport(workingDirectory, runStartedAt, done.Completed, reportEntries);
                 return done;
@@ -163,6 +169,8 @@ public sealed class RunLoopService
 
             var taskEntry = doc.TaskEntries[nextIndex.Value];
             var taskSnapshot = CaptureTaskSnapshot(workingDirectory, autoRollback);
+            var taskStartedAt = DateTimeOffset.UtcNow;
+            MarkTaskStarted(statePath, heartbeatPath, taskEntry.DisplayText, nextIndex.Value, totalTasks, taskStartedAt);
             AppendExecutionEvent(
                 executionPath,
                 "task_started",
@@ -212,6 +220,7 @@ public sealed class RunLoopService
                     engine: activeEngineName,
                     taskIndex: nextIndex.Value + 1,
                     totalTasks: totalTasks);
+                MarkRunStopped(statePath, heartbeatPath, "engine_not_found");
                 return new RunLoopResult { Completed = false, Gutter = true };
             }
 
@@ -253,6 +262,7 @@ public sealed class RunLoopService
                     taskIndex: nextIndex.Value + 1,
                     totalTasks: totalTasks,
                     details: $"model={modelToUse}");
+                MarkRunStopped(statePath, heartbeatPath, "model_unavailable");
                 return new RunLoopResult { Completed = false };
             }
 
@@ -286,7 +296,6 @@ public sealed class RunLoopService
             }
 
             var beforeSnapshot = CaptureWorkspaceSnapshot(workingDirectory);
-            var taskStartedAt = DateTimeOffset.UtcNow;
             var taskInputTokens = 0;
             var taskOutputTokens = 0;
 
@@ -296,6 +305,17 @@ public sealed class RunLoopService
         EngineRunStart:
             while (true)
             {
+                MarkTaskEngine(statePath, heartbeatPath, activeEngineName, taskEntry.DisplayText, nextIndex.Value, totalTasks);
+                using var heartbeatCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                var heartbeatTask = RunTaskHeartbeatAsync(
+                    statePath,
+                    heartbeatPath,
+                    taskEntry.DisplayText,
+                    nextIndex.Value,
+                    totalTasks,
+                    activeEngineName,
+                    taskStartedAt,
+                    heartbeatCts.Token);
                 using var spinnerCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 var spinnerTask = RunEngineSpinnerAsync(activeEngineName, spinnerCts.Token);
                 try
@@ -304,6 +324,8 @@ public sealed class RunLoopService
                 }
                 finally
                 {
+                    heartbeatCts.Cancel();
+                    try { await heartbeatTask; } catch { }
                     spinnerCts.Cancel();
                     try { await spinnerTask; } catch { }
                 }
@@ -444,6 +466,7 @@ public sealed class RunLoopService
                         totalTasks: totalTasks,
                         attempt: attempt + 1,
                         exitCode: result?.ExitCode);
+                    MarkRunStopped(statePath, heartbeatPath, "gutter");
                     var gutterResult = new RunLoopResult { Completed = false, Gutter = true };
                     AttemptRollbackIfEnabled(workingDirectory, taskSnapshot, taskEntry.DisplayText, "gutter", errorsPath);
                     reportEntries.Add(BuildReportEntry(taskEntry.DisplayText, activeEngineName, taskStartedAt, DateTimeOffset.UtcNow, result?.ExitCode ?? -1, attempt, taskInputTokens, taskOutputTokens, "gutter"));
@@ -496,6 +519,7 @@ public sealed class RunLoopService
                             taskIndex: nextIndex.Value + 1,
                             totalTasks: totalTasks,
                             exitCode: result?.ExitCode);
+                        MarkRunStopped(statePath, heartbeatPath, "context_defer");
                         var deferred = new RunLoopResult { Completed = false };
                         WriteRunReport(workingDirectory, runStartedAt, deferred.Completed, reportEntries);
                         return deferred;
@@ -520,6 +544,7 @@ public sealed class RunLoopService
                             taskIndex: nextIndex.Value + 1,
                             totalTasks: totalTasks,
                             exitCode: result?.ExitCode);
+                        MarkRunStopped(statePath, heartbeatPath, "context_gutter");
                         var gutter = new RunLoopResult { Completed = false, Gutter = true };
                         WriteRunReport(workingDirectory, runStartedAt, gutter.Completed, reportEntries);
                         return gutter;
@@ -544,6 +569,7 @@ public sealed class RunLoopService
                     attempt: attempt + 1,
                     exitCode: result?.ExitCode,
                     details: $"errors={SanitizeLogValue(Path.GetRelativePath(workingDirectory, errorsPath))}");
+                MarkRunStopped(statePath, heartbeatPath, "engine_failed");
                 var failed = new RunLoopResult { Completed = false };
                 AttemptRollbackIfEnabled(workingDirectory, taskSnapshot, taskEntry.DisplayText, "engine_failed", errorsPath);
                 reportEntries.Add(BuildReportEntry(taskEntry.DisplayText, activeEngineName, taskStartedAt, DateTimeOffset.UtcNow, result?.ExitCode ?? -1, attempt, taskInputTokens, taskOutputTokens, "failed"));
@@ -609,6 +635,7 @@ public sealed class RunLoopService
                     _ui.WriteInfo(_s.Format("run.summary_partial", completedTasks, totalTasks));
                     _terminalView?.SetStatus(_s.Get("run.status_gutter"));
                     WriteSessionTokensSummary(sessionInputTokens, sessionOutputTokens);
+                    MarkRunStopped(statePath, heartbeatPath, "no_changes_gutter");
                     var noChangeGutter = new RunLoopResult { Completed = false, Gutter = true };
                     AttemptRollbackIfEnabled(workingDirectory, taskSnapshot, taskEntry.DisplayText, "no_changes_gutter", errorsPath);
                     reportEntries.Add(BuildReportEntry(taskEntry.DisplayText, activeEngineName, taskStartedAt, DateTimeOffset.UtcNow, result?.ExitCode ?? -1, attempt, taskInputTokens, taskOutputTokens, "gutter"));
@@ -638,6 +665,7 @@ public sealed class RunLoopService
                         attempt: attempt + 1,
                         exitCode: result?.ExitCode,
                         details: $"policy={noChangePolicy}");
+                    MarkRunStopped(statePath, heartbeatPath, "no_changes_fail_fast");
                     WriteRunReport(workingDirectory, runStartedAt, false, reportEntries);
                     return new RunLoopResult { Completed = false };
                 }
@@ -701,6 +729,7 @@ public sealed class RunLoopService
                             taskIndex: nextIndex.Value + 1,
                             totalTasks: totalTasks,
                             exitCode: result?.ExitCode);
+                        MarkRunStopped(statePath, heartbeatPath, "lint_failed_gutter");
                         var lintGutter = new RunLoopResult { Completed = false, Gutter = true };
                         AttemptRollbackIfEnabled(workingDirectory, taskSnapshot, taskEntry.DisplayText, "lint_failed_gutter", errorsPath);
                         reportEntries.Add(BuildReportEntry(taskEntry.DisplayText, activeEngineName, taskStartedAt, DateTimeOffset.UtcNow, result?.ExitCode ?? -1, attempt, taskInputTokens, taskOutputTokens, "gutter"));
@@ -751,6 +780,7 @@ public sealed class RunLoopService
                             taskIndex: nextIndex.Value + 1,
                             totalTasks: totalTasks,
                             exitCode: result?.ExitCode);
+                        MarkRunStopped(statePath, heartbeatPath, "tests_failed_gutter");
                         var testGutter = new RunLoopResult { Completed = false, Gutter = true };
                         AttemptRollbackIfEnabled(workingDirectory, taskSnapshot, taskEntry.DisplayText, "tests_failed_gutter", errorsPath);
                         reportEntries.Add(BuildReportEntry(taskEntry.DisplayText, activeEngineName, taskStartedAt, DateTimeOffset.UtcNow, result?.ExitCode ?? -1, attempt, taskInputTokens, taskOutputTokens, "gutter"));
@@ -800,6 +830,7 @@ public sealed class RunLoopService
                             taskIndex: nextIndex.Value + 1,
                             totalTasks: totalTasks,
                             exitCode: result?.ExitCode);
+                        MarkRunStopped(statePath, heartbeatPath, "browser_failed_gutter");
                         var browserGutter = new RunLoopResult { Completed = false, Gutter = true };
                         AttemptRollbackIfEnabled(workingDirectory, taskSnapshot, taskEntry.DisplayText, "browser_failed_gutter", errorsPath);
                         reportEntries.Add(BuildReportEntry(taskEntry.DisplayText, activeEngineName, taskStartedAt, DateTimeOffset.UtcNow, result?.ExitCode ?? -1, attempt, taskInputTokens, taskOutputTokens, "gutter"));
@@ -833,6 +864,15 @@ public sealed class RunLoopService
             state.Iteration = iteration + 1;
             state.LastTaskIndex = nextIndex.Value;
             state.LastTaskText = taskEntry.DisplayText;
+            state.CurrentTaskIndex = null;
+            state.CurrentTaskText = null;
+            state.CurrentEngine = null;
+            state.CurrentTaskStartedAt = null;
+            state.RunStatus = "running";
+            state.LastHeartbeat = DateTimeOffset.UtcNow;
+            state.LastExitReason = "task_completed";
+            state.LastExitAt = DateTimeOffset.UtcNow;
+            WriteHeartbeat(heartbeatPath, state, taskEntry.DisplayText, nextIndex.Value, totalTasks, activeEngineName, "idle_between_tasks");
             _stateStore.Save(statePath, state);
 
             AppendToFile(progressPath, $"- [{DateTime.UtcNow:O}] {taskEntry.DisplayText}\n");
@@ -910,6 +950,10 @@ public sealed class RunLoopService
             "run_finished",
             finalResult.Completed ? (allTasksCompleted ? "all_tasks_completed" : "max_iterations_partial_success") : "max_iterations_incomplete",
             details: $"iterations={iteration}");
+        MarkRunStopped(
+            statePath,
+            heartbeatPath,
+            finalResult.Completed ? (allTasksCompleted ? "all_tasks_completed" : "max_iterations_partial_success") : "max_iterations_incomplete");
         WriteRunReport(workingDirectory, runStartedAt, finalResult.Completed, reportEntries);
         return finalResult;
     }
@@ -1575,6 +1619,160 @@ public sealed class RunLoopService
         AppendToFile(path, $"[{DateTime.UtcNow:O}] {string.Join(" | ", parts)}{Environment.NewLine}");
     }
 
+    private void DetectUnexpectedShutdown(string statePath, string errorsPath, string executionPath)
+    {
+        var state = _stateStore.Load(statePath);
+        if (!string.Equals(state.RunStatus, "running", StringComparison.OrdinalIgnoreCase))
+            return;
+        if (state.CurrentTaskIndex == null && string.IsNullOrWhiteSpace(state.CurrentTaskText))
+            return;
+
+        state.UnexpectedShutdownDetected = true;
+        state.RunStatus = "recovered_after_unexpected_shutdown";
+        state.LastExitReason = "unexpected_shutdown_detected";
+        state.LastExitAt = DateTimeOffset.UtcNow;
+        _stateStore.Save(statePath, state);
+
+        AppendToFile(
+            errorsPath,
+            $"[{DateTime.UtcNow:O}] unexpected shutdown detected while task {state.CurrentTaskIndex + 1}: {state.CurrentTaskText}{Environment.NewLine}---{Environment.NewLine}");
+        AppendExecutionEvent(
+            executionPath,
+            "run_recovered",
+            "unexpected_shutdown_detected",
+            task: state.CurrentTaskText,
+            taskIndex: state.CurrentTaskIndex + 1,
+            details: $"last_heartbeat={state.LastHeartbeat:O}");
+    }
+
+    private void MarkRunState(string statePath, string heartbeatPath, DateTimeOffset runStartedAt, string runStatus, string exitReason)
+    {
+        var state = _stateStore.Load(statePath);
+        state.RunStatus = runStatus;
+        state.CurrentRunStartedAt = runStartedAt;
+        state.LastHeartbeat = DateTimeOffset.UtcNow;
+        state.LastExitReason = exitReason;
+        state.LastExitAt = null;
+        state.UnexpectedShutdownDetected = false;
+        _stateStore.Save(statePath, state);
+        WriteHeartbeat(heartbeatPath, state, state.CurrentTaskText, state.CurrentTaskIndex, null, state.CurrentEngine, runStatus);
+    }
+
+    private void MarkTaskStarted(string statePath, string heartbeatPath, string taskText, int taskIndex, int totalTasks, DateTimeOffset taskStartedAt)
+    {
+        var state = _stateStore.Load(statePath);
+        state.CurrentTaskIndex = taskIndex;
+        state.CurrentTaskText = taskText;
+        state.CurrentTaskStartedAt = taskStartedAt;
+        state.RunStatus = "running";
+        state.LastHeartbeat = DateTimeOffset.UtcNow;
+        state.LastExitReason = "task_started";
+        state.LastExitAt = null;
+        _stateStore.Save(statePath, state);
+        WriteHeartbeat(heartbeatPath, state, taskText, taskIndex, totalTasks, state.CurrentEngine, "task_started");
+    }
+
+    private void MarkTaskEngine(string statePath, string heartbeatPath, string activeEngineName, string taskText, int taskIndex, int totalTasks)
+    {
+        var state = _stateStore.Load(statePath);
+        state.CurrentEngine = activeEngineName;
+        state.LastHeartbeat = DateTimeOffset.UtcNow;
+        _stateStore.Save(statePath, state);
+        WriteHeartbeat(heartbeatPath, state, taskText, taskIndex, totalTasks, activeEngineName, "engine_running");
+    }
+
+    private void MarkRunStopped(string statePath, string heartbeatPath, string exitReason)
+    {
+        var state = _stateStore.Load(statePath);
+        state.RunStatus = "stopped";
+        state.LastExitReason = exitReason;
+        state.LastExitAt = DateTimeOffset.UtcNow;
+        state.LastHeartbeat = DateTimeOffset.UtcNow;
+        state.CurrentTaskIndex = null;
+        state.CurrentTaskText = null;
+        state.CurrentEngine = null;
+        state.CurrentTaskStartedAt = null;
+        _stateStore.Save(statePath, state);
+        WriteHeartbeat(heartbeatPath, state, null, null, null, null, exitReason);
+    }
+
+    private async Task RunTaskHeartbeatAsync(
+        string statePath,
+        string heartbeatPath,
+        string taskText,
+        int taskIndex,
+        int totalTasks,
+        string engineName,
+        DateTimeOffset taskStartedAt,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                var state = _stateStore.Load(statePath);
+                state.RunStatus = "running";
+                state.CurrentTaskIndex = taskIndex;
+                state.CurrentTaskText = taskText;
+                state.CurrentTaskStartedAt = taskStartedAt;
+                state.CurrentEngine = engineName;
+                state.LastHeartbeat = DateTimeOffset.UtcNow;
+                _stateStore.Save(statePath, state);
+                WriteHeartbeat(heartbeatPath, state, taskText, taskIndex, totalTasks, engineName, "heartbeat");
+                await Task.Delay(TimeSpan.FromSeconds(15), cancellationToken);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // expected
+        }
+    }
+
+    private static void WriteHeartbeat(
+        string heartbeatPath,
+        RalphState state,
+        string? taskText,
+        int? taskIndex,
+        int? totalTasks,
+        string? engineName,
+        string status)
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(heartbeatPath);
+            if (!string.IsNullOrEmpty(dir))
+                Directory.CreateDirectory(dir);
+
+            var payload = new HeartbeatDocument
+            {
+                Status = status,
+                RunStatus = state.RunStatus,
+                TaskIndex = taskIndex,
+                TaskText = taskText,
+                TotalTasks = totalTasks,
+                Engine = engineName,
+                Iteration = state.Iteration,
+                LastHeartbeat = state.LastHeartbeat ?? DateTimeOffset.UtcNow,
+                CurrentRunStartedAt = state.CurrentRunStartedAt,
+                CurrentTaskStartedAt = state.CurrentTaskStartedAt,
+                LastExitReason = state.LastExitReason,
+                LastExitAt = state.LastExitAt,
+                UnexpectedShutdownDetected = state.UnexpectedShutdownDetected
+            };
+
+            var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+            });
+            File.WriteAllText(heartbeatPath, json);
+        }
+        catch
+        {
+            // best effort
+        }
+    }
+
     private static string SanitizeLogValue(string value, int maxLength = 240)
     {
         var singleLine = value.Replace('\r', ' ').Replace('\n', ' ').Trim();
@@ -1980,4 +2178,21 @@ internal enum NoChangeAction
     Fallback,
     Retry,
     FailFast
+}
+
+internal sealed class HeartbeatDocument
+{
+    public string? Status { get; set; }
+    public string? RunStatus { get; set; }
+    public int? TaskIndex { get; set; }
+    public string? TaskText { get; set; }
+    public int? TotalTasks { get; set; }
+    public string? Engine { get; set; }
+    public int Iteration { get; set; }
+    public DateTimeOffset LastHeartbeat { get; set; }
+    public DateTimeOffset? CurrentRunStartedAt { get; set; }
+    public DateTimeOffset? CurrentTaskStartedAt { get; set; }
+    public string? LastExitReason { get; set; }
+    public DateTimeOffset? LastExitAt { get; set; }
+    public bool UnexpectedShutdownDetected { get; set; }
 }

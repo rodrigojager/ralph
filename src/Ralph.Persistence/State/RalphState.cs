@@ -16,6 +16,36 @@ public sealed class RalphState
     [JsonPropertyName("last_task_text")]
     public string? LastTaskText { get; set; }
 
+    [JsonPropertyName("current_task_index")]
+    public int? CurrentTaskIndex { get; set; }
+
+    [JsonPropertyName("current_task_text")]
+    public string? CurrentTaskText { get; set; }
+
+    [JsonPropertyName("current_engine")]
+    public string? CurrentEngine { get; set; }
+
+    [JsonPropertyName("run_status")]
+    public string? RunStatus { get; set; }
+
+    [JsonPropertyName("current_run_started_at")]
+    public DateTimeOffset? CurrentRunStartedAt { get; set; }
+
+    [JsonPropertyName("current_task_started_at")]
+    public DateTimeOffset? CurrentTaskStartedAt { get; set; }
+
+    [JsonPropertyName("last_heartbeat")]
+    public DateTimeOffset? LastHeartbeat { get; set; }
+
+    [JsonPropertyName("last_exit_reason")]
+    public string? LastExitReason { get; set; }
+
+    [JsonPropertyName("last_exit_at")]
+    public DateTimeOffset? LastExitAt { get; set; }
+
+    [JsonPropertyName("unexpected_shutdown_detected")]
+    public bool UnexpectedShutdownDetected { get; set; }
+
     [JsonPropertyName("last_updated")]
     public DateTimeOffset? LastUpdated { get; set; }
 }

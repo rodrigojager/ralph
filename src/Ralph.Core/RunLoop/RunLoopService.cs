@@ -2,8 +2,13 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading;
+using Ralph.Core.Adapters;
+using Ralph.Core.Checkpoints;
+using Ralph.Core.Context;
 using Ralph.Core.Git;
 using Ralph.Core.Localization;
+using Ralph.Core.Processes;
 using Ralph.Core.Prompting;
 using Ralph.Core.Reports;
 using Ralph.Core.RunLoop.OutputAdapters;
@@ -33,6 +38,10 @@ public sealed class RunLoopService
     private readonly EngineCommandResolver _commandResolver;
     private readonly EngineOutputDisplayAdapterRegistry _outputAdapterRegistry;
     private readonly Dictionary<string, bool?> _codexModelAvailability = new(StringComparer.OrdinalIgnoreCase);
+    private readonly EngineAdapterCatalog _adapterCatalog;
+    private readonly ContextPackBuilder _contextPackBuilder;
+    private readonly CheckpointService _checkpointService;
+    private static readonly AsyncLocal<string?> CurrentRunId = new();
 
     /// <summary>
     /// Called after each engine run with (sessionInputTokens, sessionOutputTokens, latestTokenUsage).
@@ -50,7 +59,10 @@ public sealed class RunLoopService
         GutterDetector? gutterDetector = null,
         GitService? git = null,
         IStringCatalog? strings = null,
-        EngineCommandResolver? commandResolver = null)
+        EngineCommandResolver? commandResolver = null,
+        EngineAdapterCatalog? adapterCatalog = null,
+        ContextPackBuilder? contextPackBuilder = null,
+        CheckpointService? checkpointService = null)
     {
         _engineRegistry = engineRegistry;
         _stateStore = stateStore;
@@ -64,6 +76,9 @@ public sealed class RunLoopService
         _reportWriter = new RunReportWriter(_workspaceInit);
         _commandResolver = commandResolver ?? new EngineCommandResolver();
         _outputAdapterRegistry = new EngineOutputDisplayAdapterRegistry(_s);
+        _adapterCatalog = adapterCatalog ?? new EngineAdapterCatalog(_workspaceInit);
+        _contextPackBuilder = contextPackBuilder ?? new ContextPackBuilder(_workspaceInit);
+        _checkpointService = checkpointService ?? new CheckpointService(_workspaceInit, _stateStore);
     }
 
     public async Task<RunLoopResult> RunAsync(
@@ -91,11 +106,16 @@ public sealed class RunLoopService
         bool? noChangeStopOnMaxAttemptsOverride = null,
         bool noCommit = false,
         bool fast = false,
-        PromptContextMode promptContextMode = PromptContextMode.LoopTaskScoped)
+        PromptContextMode promptContextMode = PromptContextMode.LoopTaskScoped,
+        IReadOnlyList<PrdGate>? cliGates = null,
+        string? securityModeOverride = null,
+        EngineSandboxOptions? sandboxOverride = null)
     {
         if (!_workspaceInit.IsInitialized(workingDirectory))
             _workspaceInit.Initialize(workingDirectory);
         var runStartedAt = DateTimeOffset.UtcNow;
+        var runId = CreateRunId();
+        CurrentRunId.Value = runId;
         var reportEntries = new List<RunReportTaskEntry>();
 
         // Resolve base branch once before the loop
@@ -128,7 +148,15 @@ public sealed class RunLoopService
         var executionPath = _workspaceInit.GetExecutionLogPath(workingDirectory);
         DetectUnexpectedShutdown(statePath, errorsPath, executionPath);
         MarkRunState(statePath, heartbeatPath, runStartedAt, "running", "begin");
-
+        UpdateRunState(
+            statePath,
+            runId,
+            status: "running",
+            taskEntry: null,
+            taskIndex: null,
+            engine: engineName,
+            iteration: null,
+            exitReason: null);
         AppendExecutionEvent(
             executionPath,
             "run_started",
@@ -161,7 +189,16 @@ public sealed class RunLoopService
                     "run_finished",
                     "all_tasks_completed",
                     details: $"iterations={iteration}");
-                MarkRunStopped(statePath, heartbeatPath, "all_tasks_completed");
+                UpdateRunState(
+                    statePath,
+                    runId,
+                    status: "completed",
+                    taskEntry: null,
+                    taskIndex: null,
+                    engine: null,
+                    iteration: iteration,
+                    exitReason: "all_tasks_completed");
+                MarkRunStopped(statePath, heartbeatPath, "all_tasks_completed", "completed");
                 var done = new RunLoopResult { Completed = true };
                 WriteRunReport(workingDirectory, runStartedAt, done.Completed, reportEntries);
                 return done;
@@ -203,6 +240,30 @@ public sealed class RunLoopService
             var noChangePolicy = ParseNoChangePolicy(noChangePolicyOverride ?? config.Run?.NoChangePolicy);
             var noChangeMaxAttempts = Math.Max(1, noChangeMaxAttemptsOverride ?? config.Run?.NoChangeMaxAttempts ?? 3);
             var noChangeStopOnMaxAttempts = noChangeStopOnMaxAttemptsOverride ?? config.Run?.NoChangeStopOnMaxAttempts ?? true;
+            var includeProgressContext = config.Run?.IncludeProgressContext ?? false;
+            var includeRepoMapContext = doc.Frontmatter?.IncludeRepoMap ?? config.Run?.IncludeRepoMapContext ?? false;
+            var autoCheckpoints = config.Run?.AutoCheckpoints ?? false;
+            var securityMode = securityModeOverride ?? doc.Frontmatter?.SecurityMode ?? config.Security?.Mode ?? "safe";
+            var sandboxToUse = ResolveSandboxOptions(config, doc.Frontmatter, sandboxOverride);
+            if (autoCheckpoints)
+            {
+                try
+                {
+                    var checkpoint = _checkpointService.Create(workingDirectory, $"before task {nextIndex.Value + 1}");
+                    AppendExecutionEvent(
+                        executionPath,
+                        "checkpoint_created",
+                        "before_task",
+                        task: taskEntry.DisplayText,
+                        taskIndex: nextIndex.Value + 1,
+                        totalTasks: totalTasks,
+                        details: $"checkpoint={checkpoint.Id}");
+                }
+                catch
+                {
+                    // Checkpoints are useful but must not block the loop.
+                }
+            }
             var engineNameToUse = engineName ?? doc.Frontmatter?.Engine ?? "cursor";
             var engineCandidates = BuildEngineCandidates(engineNameToUse, config);
             var activeEngineName = engineCandidates[0];
@@ -220,16 +281,42 @@ public sealed class RunLoopService
                     engine: activeEngineName,
                     taskIndex: nextIndex.Value + 1,
                     totalTasks: totalTasks);
+                UpdateRunState(
+                    statePath,
+                    runId,
+                    status: "stopped",
+                    taskEntry: taskEntry,
+                    taskIndex: nextIndex.Value,
+                    engine: activeEngineName,
+                    iteration: iteration + 1,
+                    exitReason: "engine_not_found");
                 MarkRunStopped(statePath, heartbeatPath, "engine_not_found");
                 return new RunLoopResult { Completed = false, Gutter = true };
             }
 
+            UpdateRunState(
+                statePath,
+                runId,
+                status: "running_task",
+                taskEntry: taskEntry,
+                taskIndex: nextIndex.Value,
+                engine: activeEngineName,
+                iteration: iteration + 1,
+                exitReason: null);
             _terminalView?.SetStatus(_s.Format("run.status_iteration_engine", iteration + 1, activeEngineName));
             _terminalView?.SetProgress(completedTasks + 1, totalTasks, taskEntry.DisplayText);
 
             var guardrails = File.Exists(guardrailsPath) ? File.ReadAllText(guardrailsPath) : null;
+            var progress = File.Exists(progressPath) ? File.ReadAllText(progressPath) : null;
+            var repoMap = includeRepoMapContext
+                ? _contextPackBuilder.ReadRepoMapIfAvailable(workingDirectory, refreshIfMissing: true)
+                : null;
             var cursorMode = activeEngineName.Equals("cursor", StringComparison.OrdinalIgnoreCase);
             var context = BuildPrdExecutionContext(doc, guardrails, taskEntry.DisplayText, promptContextMode);
+            if (includeProgressContext && !cursorMode && !string.IsNullOrWhiteSpace(progress))
+                context += "\n\n## Progress\n" + progress;
+            if (!string.IsNullOrWhiteSpace(repoMap) && !cursorMode)
+                context += "\n\n## Repository map\n" + repoMap;
             if (cursorMode)
                 context += "\n\n## Execution mode\nExecute the task now. Make the file changes directly and do not ask confirmation questions.";
 
@@ -238,6 +325,8 @@ public sealed class RunLoopService
             var maxTokensToUse = maxTokensOverride ?? engineConfig?.MaxTokens;
             var temperatureToUse = temperatureOverride ?? engineConfig?.Temperature;
             var resolvedCommand = _commandResolver.ResolveForExecution(activeEngineName, config);
+            var adapterManifest = _adapterCatalog.Resolve(workingDirectory, activeEngineName, engineConfig?.Adapter);
+            var launchCommand = ApplyAdapterCommand(adapterManifest, resolvedCommand);
             var browserCommand = doc.Frontmatter?.BrowserCommand;
             if (string.IsNullOrWhiteSpace(browserCommand) && config.Browser?.Enabled == true)
                 browserCommand = config.Browser.Command;
@@ -275,19 +364,22 @@ public sealed class RunLoopService
                 PrdPath = prdPath,
                 GuardrailsPath = guardrailsPath,
                 ProgressPath = progressPath,
-                CommandOverride = resolvedCommand.Executable,
-                CommandPrefixArgs = resolvedCommand.PrefixArgs,
-                CommandResolutionSource = resolvedCommand.Source,
+                CommandOverride = launchCommand.Executable,
+                CommandPrefixArgs = launchCommand.PrefixArgs,
+                CommandResolutionSource = launchCommand.Source,
                 ModelOverride = modelToUse,
                 ExtraArgsPassthrough = normalizedExtraArgs,
-                Fast = fastModeForEngine
+                Fast = fastModeForEngine,
+                SecurityMode = securityMode,
+                Adapter = adapterManifest?.ToOptions(),
+                Sandbox = sandboxToUse
             };
 
             if (verbose)
             {
                 _ui.WriteVerbose($"[verbose] --- Iteration {iteration + 1} ---");
                 _ui.WriteVerbose($"[verbose] Engine:       {activeEngineName}");
-                _ui.WriteVerbose($"[verbose] Command:      {resolvedCommand.Display()} [{resolvedCommand.Source}]");
+                _ui.WriteVerbose($"[verbose] Command:      {launchCommand.Display()} [{launchCommand.Source}]");
                 _ui.WriteVerbose($"[verbose] Model:        {modelToUse ?? "(default)"}");
                 if (normalizedExtraArgs?.Count > 0)
                     _ui.WriteVerbose($"[verbose] Extra args:   {string.Join(" ", normalizedExtraArgs)}");
@@ -389,6 +481,8 @@ public sealed class RunLoopService
                         var fallbackFast = ResolveFastMode(fallbackName, fallbackModel, fast);
                         if (fast && !fallbackFast)
                             _ui.WriteWarn(_s.Format("run.fast_not_supported", fallbackName, fallbackModel ?? "(default)"));
+                        var fallbackAdapter = _adapterCatalog.Resolve(workingDirectory, activeEngineName, engineConfig?.Adapter);
+                        var fallbackLaunch = ApplyAdapterCommand(fallbackAdapter, fallbackResolvedCommand);
                         request = new EngineRequest
                         {
                             WorkingDirectory = request.WorkingDirectory,
@@ -396,12 +490,15 @@ public sealed class RunLoopService
                             PrdPath = request.PrdPath,
                             GuardrailsPath = request.GuardrailsPath,
                             ProgressPath = request.ProgressPath,
-                            CommandOverride = fallbackResolvedCommand.Executable,
-                            CommandPrefixArgs = fallbackResolvedCommand.PrefixArgs,
-                            CommandResolutionSource = fallbackResolvedCommand.Source,
+                            CommandOverride = fallbackLaunch.Executable,
+                            CommandPrefixArgs = fallbackLaunch.PrefixArgs,
+                            CommandResolutionSource = fallbackLaunch.Source,
                             ModelOverride = fallbackModel,
                             ExtraArgsPassthrough = BuildExtraArgs(activeEngineName, fallbackMaxTokens, fallbackTemperature, extraArgsPassthrough),
-                            Fast = fallbackFast
+                            Fast = fallbackFast,
+                            SecurityMode = securityMode,
+                            Adapter = fallbackAdapter?.ToOptions(),
+                            Sandbox = sandboxToUse
                         };
                         _ui.WriteWarn(_s.Format("run.fallback_engine", activeEngineName));
                         continue;
@@ -609,6 +706,8 @@ public sealed class RunLoopService
                         var fallbackModel = modelOverride ?? doc.Frontmatter?.Model ?? engineConfig?.DefaultModel;
                         var fallbackMaxTokens = maxTokensOverride ?? engineConfig?.MaxTokens;
                         var fallbackTemperature = temperatureOverride ?? engineConfig?.Temperature;
+                        var fallbackAdapter = _adapterCatalog.Resolve(workingDirectory, activeEngineName, engineConfig?.Adapter);
+                        var fallbackLaunch = ApplyAdapterCommand(fallbackAdapter, fallbackResolvedCommand);
                         request = new EngineRequest
                         {
                             WorkingDirectory = request.WorkingDirectory,
@@ -616,12 +715,15 @@ public sealed class RunLoopService
                             PrdPath = request.PrdPath,
                             GuardrailsPath = request.GuardrailsPath,
                             ProgressPath = request.ProgressPath,
-                            CommandOverride = fallbackResolvedCommand.Executable,
-                            CommandPrefixArgs = fallbackResolvedCommand.PrefixArgs,
-                            CommandResolutionSource = fallbackResolvedCommand.Source,
+                            CommandOverride = fallbackLaunch.Executable,
+                            CommandPrefixArgs = fallbackLaunch.PrefixArgs,
+                            CommandResolutionSource = fallbackLaunch.Source,
                             ModelOverride = fallbackModel,
                             ExtraArgsPassthrough = BuildExtraArgs(activeEngineName, fallbackMaxTokens, fallbackTemperature, extraArgsPassthrough),
-                            Fast = fast
+                            Fast = ResolveFastMode(activeEngineName, fallbackModel, fast),
+                            SecurityMode = securityMode,
+                            Adapter = fallbackAdapter?.ToOptions(),
+                            Sandbox = sandboxToUse
                         };
                         _ui.WriteWarn(_s.Format("run.fallback_engine", activeEngineName));
                         attempt = 0;
@@ -704,6 +806,50 @@ public sealed class RunLoopService
                 iteration++;
                 continue;
             }
+
+            var gates = BuildGates(doc.Frontmatter, taskEntry, cliGates);
+            var gateBlockedTask = false;
+            foreach (var gate in gates)
+            {
+                if (string.IsNullOrWhiteSpace(gate.Command))
+                    continue;
+
+                if (verbose) _ui.WriteVerbose($"[verbose] Running gate '{gate.Name}': {gate.Command}");
+                _terminalView?.SetStatus($"Running gate: {gate.Name}");
+                var gateResult = await RunGateCommandAsync(workingDirectory, gate, cancellationToken);
+                AppendExecutionEvent(
+                    executionPath,
+                    gateResult.Passed ? "gate_passed" : "gate_failed",
+                    gate.Name,
+                    task: taskEntry.DisplayText,
+                    engine: activeEngineName,
+                    taskIndex: nextIndex.Value + 1,
+                    totalTasks: totalTasks,
+                    exitCode: gateResult.ExitCode,
+                    details: $"command={SanitizeLogValue(gate.Command)}");
+
+                if (gateResult.Passed || !IsBlockingGate(gate))
+                    continue;
+
+                _ui.WriteWarn($"Gate failed: {gate.Name}. Task not marked complete.");
+                AttemptRollbackIfEnabled(workingDirectory, taskSnapshot, taskEntry.DisplayText, $"gate_failed:{gate.Name}", errorsPath);
+                reportEntries.Add(BuildReportEntry(taskEntry.DisplayText, activeEngineName, taskStartedAt, DateTimeOffset.UtcNow, gateResult.ExitCode, attempt, taskInputTokens, taskOutputTokens, "gate_failed"));
+                AppendExecutionEvent(
+                    executionPath,
+                    "task_blocked",
+                    "gate_failed",
+                    task: taskEntry.DisplayText,
+                    engine: activeEngineName,
+                    taskIndex: nextIndex.Value + 1,
+                    totalTasks: totalTasks,
+                    exitCode: gateResult.ExitCode,
+                    details: $"gate={SanitizeLogValue(gate.Name)}");
+                gateBlockedTask = true;
+                iteration++;
+                break;
+            }
+            if (gateBlockedTask)
+                continue;
 
             var lintCommand = doc.Frontmatter?.LintCommand;
             if (!skipLint && !string.IsNullOrWhiteSpace(lintCommand))
@@ -864,9 +1010,11 @@ public sealed class RunLoopService
             state.Iteration = iteration + 1;
             state.LastTaskIndex = nextIndex.Value;
             state.LastTaskText = taskEntry.DisplayText;
+            state.CurrentRunId = runId;
+            state.CurrentTaskId = taskEntry.Id;
             state.CurrentTaskIndex = null;
             state.CurrentTaskText = null;
-            state.CurrentEngine = null;
+            state.CurrentEngine = activeEngineName;
             state.CurrentTaskStartedAt = null;
             state.RunStatus = "running";
             state.LastHeartbeat = DateTimeOffset.UtcNow;
@@ -941,7 +1089,7 @@ public sealed class RunLoopService
         }
         else
         {
-            _terminalView?.SetStatus(_s.Get("run.status_max_iterations"));
+            _terminalView?.SetStatus(_s.Get("run.status_all_tasks_completed"));
         }
         WriteSessionTokensSummary(sessionInputTokens, sessionOutputTokens);
         var finalResult = new RunLoopResult { Completed = allTasksCompleted || anyTaskCompletedInRun };
@@ -950,10 +1098,20 @@ public sealed class RunLoopService
             "run_finished",
             finalResult.Completed ? (allTasksCompleted ? "all_tasks_completed" : "max_iterations_partial_success") : "max_iterations_incomplete",
             details: $"iterations={iteration}");
+        UpdateRunState(
+            statePath,
+            runId,
+            status: finalResult.Completed ? "completed" : "stopped",
+            taskEntry: null,
+            taskIndex: null,
+            engine: null,
+            iteration: iteration,
+            exitReason: allTasksCompleted ? "all_tasks_completed" : "max_iterations");
         MarkRunStopped(
             statePath,
             heartbeatPath,
-            finalResult.Completed ? (allTasksCompleted ? "all_tasks_completed" : "max_iterations_partial_success") : "max_iterations_incomplete");
+            finalResult.Completed ? (allTasksCompleted ? "all_tasks_completed" : "max_iterations_partial_success") : "max_iterations_incomplete",
+            finalResult.Completed ? "completed" : "stopped");
         WriteRunReport(workingDirectory, runStartedAt, finalResult.Completed, reportEntries);
         return finalResult;
     }
@@ -983,7 +1141,8 @@ public sealed class RunLoopService
         var engineConfig = config.Engines?.TryGetValue(engineNameToUse, out var ec) == true ? ec : null;
         var modelToUse = modelOverride ?? frontmatterModel ?? engineConfig?.DefaultModel;
         var resolvedCommand = _commandResolver.ResolveForExecution(engineNameToUse, config);
-        var command = resolvedCommand.Display();
+        var adapterManifest = _adapterCatalog.Resolve(workingDirectory, engineNameToUse, engineConfig?.Adapter);
+        var command = ApplyAdapterCommand(adapterManifest, resolvedCommand).Display();
 
         Console.WriteLine($"  Engine:     {engineNameToUse} ({command})");
         Console.WriteLine($"  Model:      {(modelToUse ?? "(default)")}");
@@ -1050,7 +1209,8 @@ public sealed class RunLoopService
         var engineConfig = config.Engines?.TryGetValue(engineNameToUse, out var ec) == true ? ec : null;
         var modelToUse = modelOverride ?? engineConfig?.DefaultModel;
         var resolvedCommand = _commandResolver.ResolveForExecution(engineNameToUse, config);
-        var command = resolvedCommand.Display();
+        var adapterManifest = _adapterCatalog.Resolve(workingDirectory, engineNameToUse, engineConfig?.Adapter);
+        var command = ApplyAdapterCommand(adapterManifest, resolvedCommand).Display();
 
         Console.WriteLine($"  Engine:     {engineNameToUse} ({command})");
         Console.WriteLine($"  Model:      {(modelToUse ?? "(default)")}");
@@ -1099,7 +1259,10 @@ public sealed class RunLoopService
         bool? noChangeStopOnMaxAttemptsOverride = null,
         bool noCommit = false,
         bool fast = false,
-        PromptContextMode promptContextMode = PromptContextMode.LoopTaskScoped)
+        PromptContextMode promptContextMode = PromptContextMode.LoopTaskScoped,
+        IReadOnlyList<PrdGate>? cliGates = null,
+        string? securityModeOverride = null,
+        EngineSandboxOptions? sandboxOverride = null)
     {
         return await RunAsync(
             workingDirectory,
@@ -1126,7 +1289,10 @@ public sealed class RunLoopService
             noChangeStopOnMaxAttemptsOverride,
             noCommit,
             fast,
-            promptContextMode);
+            promptContextMode,
+            cliGates,
+            securityModeOverride,
+            sandboxOverride);
     }
 
     public async Task<RunLoopResult> RunSingleTaskAsync(
@@ -1140,10 +1306,16 @@ public sealed class RunLoopService
         CancellationToken cancellationToken = default,
         bool verbose = false,
         bool debugEngineJson = false,
-        bool fast = false)
+        bool fast = false,
+        string? securityModeOverride = null,
+        EngineSandboxOptions? sandboxOverride = null)
     {
         var executionPath = _workspaceInit.GetExecutionLogPath(workingDirectory);
         Directory.CreateDirectory(_workspaceInit.GetRalphDir(workingDirectory));
+        var runId = CreateRunId();
+        CurrentRunId.Value = runId;
+        var statePath = _workspaceInit.GetStatePath(workingDirectory);
+        UpdateRunState(statePath, runId, "running_task", null, null, engineName, null, null);
         AppendExecutionEvent(
             executionPath,
             "run_started",
@@ -1152,6 +1324,8 @@ public sealed class RunLoopService
 
         var configPath = _workspaceInit.GetConfigPath(workingDirectory);
         var config = File.Exists(configPath) ? new ConfigStore().Load(configPath) : RalphConfig.Default;
+        var securityMode = securityModeOverride ?? config.Security?.Mode ?? "safe";
+        var sandboxToUse = ResolveSandboxOptions(config, frontmatter: null, sandboxOverride);
 
         var engineNameToUse = engineName ?? "cursor";
         var candidates = BuildEngineCandidates(engineNameToUse, config);
@@ -1171,6 +1345,8 @@ public sealed class RunLoopService
 
         var engineConfig = config.Engines?.TryGetValue(activeEngineName, out var ec) == true ? ec : null;
         var resolvedCommand = _commandResolver.ResolveForExecution(activeEngineName, config);
+        var adapterManifest = _adapterCatalog.Resolve(workingDirectory, activeEngineName, engineConfig?.Adapter);
+        var launchCommand = ApplyAdapterCommand(adapterManifest, resolvedCommand);
         var modelToUse = modelOverride ?? engineConfig?.DefaultModel;
         var maxTokensToUse = maxTokensOverride ?? engineConfig?.MaxTokens;
         var fastModeForEngine = ResolveFastMode(activeEngineName, modelToUse, fast);
@@ -1206,7 +1382,7 @@ public sealed class RunLoopService
         {
             _ui.WriteVerbose($"[verbose] Brownfield mode (no PRD)");
             _ui.WriteVerbose($"[verbose] Engine:       {activeEngineName}");
-            _ui.WriteVerbose($"[verbose] Command:      {resolvedCommand.Display()} [{resolvedCommand.Source}]");
+            _ui.WriteVerbose($"[verbose] Command:      {launchCommand.Display()} [{launchCommand.Source}]");
             _ui.WriteVerbose($"[verbose] Model:        {modelToUse ?? "(default)"}");
             _ui.WriteVerbose($"[verbose] Prompt:\n{context}");
         }
@@ -1220,13 +1396,16 @@ public sealed class RunLoopService
             PrdPath = null,
             GuardrailsPath = guardrailsPath,
             ProgressPath = null,
-            CommandOverride = resolvedCommand.Executable,
-                CommandPrefixArgs = resolvedCommand.PrefixArgs,
-                CommandResolutionSource = resolvedCommand.Source,
-                ModelOverride = modelToUse,
-                ExtraArgsPassthrough = normalizedExtraArgs,
-                Fast = fastModeForEngine
-            };
+            CommandOverride = launchCommand.Executable,
+            CommandPrefixArgs = launchCommand.PrefixArgs,
+            CommandResolutionSource = launchCommand.Source,
+            ModelOverride = modelToUse,
+            ExtraArgsPassthrough = normalizedExtraArgs,
+            Fast = fastModeForEngine,
+            SecurityMode = securityMode,
+            Adapter = adapterManifest?.ToOptions(),
+            Sandbox = sandboxToUse
+        };
 
         var result = await activeEngine.RunAsync(request, cancellationToken);
         WriteEngineDebugSnapshot(
@@ -1246,6 +1425,8 @@ public sealed class RunLoopService
             {
                 var fallbackConfig = config.Engines?.TryGetValue(fallbackName, out var fc) == true ? fc : null;
                 var fallbackResolved = _commandResolver.ResolveForExecution(fallbackName, config);
+                var fallbackAdapter = _adapterCatalog.Resolve(workingDirectory, fallbackName, fallbackConfig?.Adapter);
+                var fallbackLaunch = ApplyAdapterCommand(fallbackAdapter, fallbackResolved);
                 var fallbackModel = modelOverride ?? fallbackConfig?.DefaultModel;
                 var fallbackMaxTokens = maxTokensOverride ?? fallbackConfig?.MaxTokens;
                 var fallbackFast = ResolveFastMode(fallbackName, fallbackModel, fast);
@@ -1259,12 +1440,15 @@ public sealed class RunLoopService
                     PrdPath = request.PrdPath,
                     GuardrailsPath = request.GuardrailsPath,
                     ProgressPath = request.ProgressPath,
-                    CommandOverride = fallbackResolved.Executable,
-                    CommandPrefixArgs = fallbackResolved.PrefixArgs,
-                    CommandResolutionSource = fallbackResolved.Source,
+                    CommandOverride = fallbackLaunch.Executable,
+                    CommandPrefixArgs = fallbackLaunch.PrefixArgs,
+                    CommandResolutionSource = fallbackLaunch.Source,
                     ModelOverride = fallbackModel,
                     ExtraArgsPassthrough = fallbackArgs,
-                    Fast = fallbackFast
+                    Fast = fallbackFast,
+                    SecurityMode = securityMode,
+                    Adapter = fallbackAdapter?.ToOptions(),
+                    Sandbox = sandboxToUse
                 };
                 _ui.WriteWarn(_s.Format("run.fallback_engine", fallbackName));
                 result = await fallbackEngine.RunAsync(request, cancellationToken);
@@ -1311,6 +1495,7 @@ public sealed class RunLoopService
                 task: taskText,
                 engine: activeEngineName,
                 exitCode: result.ExitCode);
+            UpdateRunState(statePath, runId, "stopped", null, null, activeEngineName, null, "engine_failed");
             var rawOutput = !string.IsNullOrWhiteSpace(result.Stderr) ? result.Stderr : result.Stdout;
             if (!string.IsNullOrWhiteSpace(rawOutput))
                 foreach (var line in FilterMeaningfulLines(rawOutput))
@@ -1337,6 +1522,7 @@ public sealed class RunLoopService
             task: taskText,
             engine: activeEngineName,
             exitCode: result.ExitCode);
+        UpdateRunState(statePath, runId, "completed", null, null, activeEngineName, null, "success");
 
         _terminalView?.SetStatus(_s.Get("run.status_task_completed"));
         _ui.WriteInfo(_s.Format("run.done_duration", result.Duration.TotalSeconds));
@@ -1398,27 +1584,104 @@ public sealed class RunLoopService
         _ui.WriteInfo(_s.Format("run.session_tokens", sessionInputTokens, sessionOutputTokens, total));
     }
 
+    private static IReadOnlyList<PrdGate> BuildGates(
+        PrdFrontmatter? frontmatter,
+        PrdTaskEntry taskEntry,
+        IReadOnlyList<PrdGate>? cliGates)
+    {
+        var gates = new List<PrdGate>();
+        if (frontmatter?.Gates is { Count: > 0 })
+            gates.AddRange(frontmatter.Gates);
+        if (taskEntry.Gates is { Count: > 0 })
+            gates.AddRange(taskEntry.Gates);
+        if (cliGates is { Count: > 0 })
+            gates.AddRange(cliGates);
+        return gates;
+    }
+
+    private static bool IsBlockingGate(PrdGate gate)
+    {
+        if (!gate.Required)
+            return false;
+        return !string.Equals(gate.Policy, "warn", StringComparison.OrdinalIgnoreCase)
+               && !string.Equals(gate.Policy, "non_blocking", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static async Task<GateRunResult> RunGateCommandAsync(string workingDirectory, PrdGate gate, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await ProcessRunner.RunShellAsync(gate.Command, workingDirectory, TimeSpan.FromMinutes(10), cancellationToken);
+            return new GateRunResult(result.ExitCode == 0, result.ExitCode);
+        }
+        catch
+        {
+            return new GateRunResult(false, -1);
+        }
+    }
+
+    private static EngineSandboxOptions? ResolveSandboxOptions(
+        RalphConfig config,
+        PrdFrontmatter? frontmatter,
+        EngineSandboxOptions? overrideOptions)
+    {
+        if (overrideOptions != null)
+            return overrideOptions;
+
+        var enabled = frontmatter?.Sandbox != null || config.Sandbox?.Enabled == true;
+        var provider = frontmatter?.Sandbox ?? config.Sandbox?.Provider ?? "process";
+        return new EngineSandboxOptions
+        {
+            Enabled = enabled,
+            Provider = provider,
+            Image = config.Sandbox?.Image,
+            Network = config.Sandbox?.Network
+        };
+    }
+
+    private void UpdateRunState(
+        string statePath,
+        string runId,
+        string status,
+        PrdTaskEntry? taskEntry,
+        int? taskIndex,
+        string? engine,
+        int? iteration,
+        string? exitReason)
+    {
+        try
+        {
+            var state = _stateStore.Load(statePath);
+            if (iteration.HasValue)
+                state.Iteration = iteration.Value;
+            state.CurrentRunId = runId;
+            state.CurrentTaskId = taskEntry?.Id;
+            state.CurrentTaskIndex = taskIndex;
+            state.CurrentTaskText = taskEntry?.DisplayText;
+            state.CurrentEngine = engine;
+            state.RunStatus = status;
+            if (!string.IsNullOrWhiteSpace(exitReason))
+            {
+                state.LastExitReason = exitReason;
+                state.LastExitAt = DateTimeOffset.UtcNow;
+            }
+            _stateStore.Save(statePath, state);
+        }
+        catch
+        {
+            // State telemetry must not block task execution.
+        }
+    }
+
+    private static string CreateRunId() =>
+        DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N")[..8];
+
     private static async Task<bool> RunTestCommandAsync(string workingDirectory, string command, CancellationToken cancellationToken)
     {
         try
         {
-            var fileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh";
-            var arguments = OperatingSystem.IsWindows()
-                ? $"/c {command}"
-                : $"-lc \"{command.Replace("\"", "\\\"")}\"";
-            using var process = Process.Start(new ProcessStartInfo
-            {
-                FileName = fileName,
-                Arguments = arguments,
-                WorkingDirectory = workingDirectory,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            });
-            if (process == null) return false;
-            await process.WaitForExitAsync(cancellationToken);
-            return process.ExitCode == 0;
+            var result = await ProcessRunner.RunShellAsync(command, workingDirectory, TimeSpan.FromMinutes(10), cancellationToken);
+            return result.ExitCode == 0;
         }
         catch
         {
@@ -1617,6 +1880,58 @@ public sealed class RunLoopService
             parts.Add($"details={SanitizeLogValue(details, maxLength: 400)}");
 
         AppendToFile(path, $"[{DateTime.UtcNow:O}] {string.Join(" | ", parts)}{Environment.NewLine}");
+        AppendJsonExecutionEvent(path, eventName, reason, task, engine, taskIndex, totalTasks, attempt, exitCode, details);
+    }
+
+    private static void AppendJsonExecutionEvent(
+        string executionLogPath,
+        string eventName,
+        string reason,
+        string? task,
+        string? engine,
+        int? taskIndex,
+        int? totalTasks,
+        int? attempt,
+        int? exitCode,
+        string? details)
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(executionLogPath);
+            if (string.IsNullOrWhiteSpace(dir))
+                return;
+
+            var path = Path.Combine(dir, WorkspaceInitializer.EventsLogFileName);
+            var payload = new
+            {
+                schema_version = 1,
+                event_id = Guid.NewGuid().ToString("N"),
+                run_id = CurrentRunId.Value,
+                timestamp = DateTimeOffset.UtcNow.ToString("O"),
+                event_name = eventName,
+                reason,
+                task_id = string.IsNullOrWhiteSpace(task) ? null : BuildStableTaskId(task!),
+                task = string.IsNullOrWhiteSpace(task) ? null : SanitizeLogValue(task!),
+                engine = string.IsNullOrWhiteSpace(engine) ? null : engine,
+                task_index = taskIndex,
+                total_tasks = totalTasks,
+                attempt,
+                exit_code = exitCode,
+                details = string.IsNullOrWhiteSpace(details) ? null : SecretRedactor.Redact(SanitizeLogValue(details!, maxLength: 800))
+            };
+            AppendToFile(path, JsonSerializer.Serialize(payload) + Environment.NewLine);
+        }
+        catch
+        {
+            // JSONL telemetry is best-effort and should never alter run behavior.
+        }
+    }
+
+    private static string BuildStableTaskId(string task)
+    {
+        using var sha = SHA256.Create();
+        var bytes = System.Text.Encoding.UTF8.GetBytes(task);
+        return Convert.ToHexString(sha.ComputeHash(bytes))[..16].ToLowerInvariant();
     }
 
     private void DetectUnexpectedShutdown(string statePath, string errorsPath, string executionPath)
@@ -1681,10 +1996,10 @@ public sealed class RunLoopService
         WriteHeartbeat(heartbeatPath, state, taskText, taskIndex, totalTasks, activeEngineName, "engine_running");
     }
 
-    private void MarkRunStopped(string statePath, string heartbeatPath, string exitReason)
+    private void MarkRunStopped(string statePath, string heartbeatPath, string exitReason, string runStatus = "stopped")
     {
         var state = _stateStore.Load(statePath);
-        state.RunStatus = "stopped";
+        state.RunStatus = runStatus;
         state.LastExitReason = exitReason;
         state.LastExitAt = DateTimeOffset.UtcNow;
         state.LastHeartbeat = DateTimeOffset.UtcNow;
@@ -1924,6 +2239,50 @@ public sealed class RunLoopService
         return args;
     }
 
+    private static ResolvedEngineCommand ApplyAdapterCommand(EngineAdapterManifest? adapter, ResolvedEngineCommand resolved)
+    {
+        if (adapter == null || string.IsNullOrWhiteSpace(adapter.Command))
+            return resolved;
+
+        var tokens = SplitCommandLine(adapter.Command!);
+        if (tokens.Count == 0)
+            return resolved;
+
+        return new ResolvedEngineCommand(tokens[0], tokens.Skip(1).ToArray(), "adapter", true);
+    }
+
+    private static List<string> SplitCommandLine(string command)
+    {
+        var result = new List<string>();
+        var current = new System.Text.StringBuilder();
+        var inQuotes = false;
+        for (var i = 0; i < command.Length; i++)
+        {
+            var ch = command[i];
+            if (ch == '"')
+            {
+                inQuotes = !inQuotes;
+                continue;
+            }
+
+            if (!inQuotes && char.IsWhiteSpace(ch))
+            {
+                if (current.Length > 0)
+                {
+                    result.Add(current.ToString());
+                    current.Clear();
+                }
+                continue;
+            }
+
+            current.Append(ch);
+        }
+
+        if (current.Length > 0)
+            result.Add(current.ToString());
+        return result;
+    }
+
     private static List<string> BuildEngineCandidates(string primary, RalphConfig config)
     {
         var ordered = new List<string>();
@@ -2145,6 +2504,7 @@ public sealed class RunLoopResult
 }
 
 internal readonly record struct WorkspaceSnapshot(string Hash);
+internal readonly record struct GateRunResult(bool Passed, int ExitCode);
 internal sealed record TaskGitSnapshot(HashSet<string> PreUntrackedFiles);
 
 internal enum ContextSignal

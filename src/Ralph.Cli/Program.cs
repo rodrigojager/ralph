@@ -1,9 +1,13 @@
 using Ralph.Cli.Commands;
 using Ralph.Cli.Infrastructure;
 using System.Diagnostics;
+using Ralph.Core.Adapters;
+using Ralph.Core.Checkpoints;
 using Ralph.Core.Config;
+using Ralph.Core.Context;
 using Ralph.Core.Localization;
 using Ralph.Core.RunLoop;
+using Ralph.Engines.Abstractions;
 using Ralph.Engines.Agent;
 using Ralph.Engines.Cursor;
 using Ralph.Engines.Registry;
@@ -56,7 +60,7 @@ var uiMode = globalConfig.EffectiveUi();
 var cwd = Directory.GetCurrentDirectory();
 
 string? command = null;
-var skipTests = true;
+var skipTests = false;
 var runMode = RunCommandMode.Loop;
 var runModeWasSet = false;
 var runModeSetBy = (string?)null;
@@ -98,6 +102,13 @@ var ignoreContextStops = true;
 var noChangePolicyOverride = (string?)null;
 var noChangeMaxAttemptsOverride = (int?)null;
 var noChangeStopOnMaxAttemptsOverride = (bool?)null;
+var outputJson = false;
+var gateSpecs = new List<string>();
+var securityModeOverride = (string?)null;
+var sandboxEnabledOverride = (bool?)null;
+var sandboxProviderOverride = (string?)null;
+var sandboxImageOverride = (string?)null;
+var sandboxNetworkOverride = (string?)null;
 var parallelIntegration = (string?)null;
 var runTestsWasSet = false;
 var positionals = new List<string>();
@@ -140,6 +151,12 @@ while (i < argsList.Count)
     if (a == "about")    { command = "about";    i++; continue; }
     if (a == "update")   { command = "update";   i++; continue; }
     if (a == "report")   { command = "report";   i++; continue; }
+    if (a == "status")   { command = "status";   i++; continue; }
+    if (a == "events")   { command = "events";   i++; continue; }
+    if (a == "checkpoint" || a == "checkpoints") { command = "checkpoint"; i++; continue; }
+    if (a == "context")  { command = "context";  i++; continue; }
+    if (a == "adapter" || a == "adapters") { command = "adapters"; i++; continue; }
+    if (a == "recipe" || a == "recipes") { command = "recipes"; i++; continue; }
     if (a == "--skip-tests")
     {
         if (runTestsWasSet && skipTests == false)
@@ -220,6 +237,28 @@ while (i < argsList.Count)
     }
     if (a == "--no-lint" || a == "--skip-lint") { skipLint = true; i++; continue; }
     if (a == "--no-commit") { noCommit = true; i++; continue; }
+    if (a == "--json") { outputJson = true; i++; continue; }
+    if ((a == "--gate" || a == "--run-gate") && i + 1 < argsList.Count) { gateSpecs.Add(argsList[i + 1]); i += 2; continue; }
+    if (a == "--test-command" && i + 1 < argsList.Count) { gateSpecs.Add("test=" + argsList[i + 1]); i += 2; continue; }
+    if (a == "--lint-command" && i + 1 < argsList.Count) { gateSpecs.Add("lint=" + argsList[i + 1]); i += 2; continue; }
+    if (a == "--security" && i + 1 < argsList.Count)
+    {
+        var mode = argsList[i + 1].Trim().ToLowerInvariant();
+        if (mode is not ("safe" or "auto" or "dangerous"))
+        {
+            Console.Error.WriteLine("Invalid --security value. Use: safe, auto, dangerous");
+            return 1;
+        }
+        securityModeOverride = mode;
+        i += 2;
+        continue;
+    }
+    if (a == "--dangerous") { securityModeOverride = "dangerous"; i++; continue; }
+    if (a == "--sandbox") { sandboxEnabledOverride = true; i++; continue; }
+    if (a == "--no-sandbox") { sandboxEnabledOverride = false; i++; continue; }
+    if (a == "--sandbox-provider" && i + 1 < argsList.Count) { sandboxProviderOverride = argsList[i + 1]; sandboxEnabledOverride = true; i += 2; continue; }
+    if (a == "--sandbox-image" && i + 1 < argsList.Count) { sandboxImageOverride = argsList[i + 1]; sandboxEnabledOverride = true; i += 2; continue; }
+    if (a == "--sandbox-network" && i + 1 < argsList.Count) { sandboxNetworkOverride = argsList[i + 1]; sandboxEnabledOverride = true; i += 2; continue; }
     if (a == "--dry-run") { dryRun = true; i++; continue; }
     if (a == "--retry-failed") { retryFailed = true; i++; continue; }
     if (a == "--parallel-integration")
@@ -572,9 +611,11 @@ registry.Register(new CopilotEngine());
 registry.Register(new GeminiEngine());
 var stateStore = new StateStore();
 var workspaceInit = new WorkspaceInitializer();
+var adapterCatalog = new EngineAdapterCatalog(workspaceInit);
+adapterCatalog.RegisterAdapters(cwd, registry);
 var retryPolicy = new RetryPolicy();
 var gutterDetector = new GutterDetector();
-var runLoop = new RunLoopService(registry, stateStore, workspaceInit, ui, terminalView, retryPolicy, gutterDetector, strings: s);
+var runLoop = new RunLoopService(registry, stateStore, workspaceInit, ui, terminalView, retryPolicy, gutterDetector, strings: s, adapterCatalog: adapterCatalog);
 
 if (tuiDashboard != null)
 {
@@ -604,7 +645,15 @@ var uiCmd          = new UiCommand();
 var aboutCmd       = new AboutCommand();
 var updateCmd      = new UpdateCommand();
 var reportCmd      = new ReportCommand(workspaceInit);
+var statusCmd      = new StatusCommand(workspaceInit, stateStore);
+var eventsCmd      = new EventsCommand(workspaceInit);
+var checkpointCmd  = new CheckpointCommand(new CheckpointService(workspaceInit, stateStore));
+var contextCmd     = new ContextCommand(new ContextPackBuilder(workspaceInit));
+var adaptersCmd    = new AdaptersCommand(adapterCatalog);
+var recipesCmd     = new RecipesCommand(workspaceInit);
 var prdPath        = ResolvePrdPath(cwd, prdOverride);
+var cliGates       = gateSpecs.Select(ParseGateSpec).ToList();
+var sandboxOverride = BuildSandboxOverride(sandboxEnabledOverride, sandboxProviderOverride, sandboxImageOverride, sandboxNetworkOverride);
 
 if (command == null)
 {
@@ -647,6 +696,39 @@ try
     {
         var sub = positionals.Count > 0 ? positionals[0] : "last";
         return reportCmd.Execute(cwd, sub, s);
+    }
+
+    if (command == "status")
+        return statusCmd.Execute(cwd, prdPath, outputJson);
+
+    if (command == "events")
+    {
+        var sub = positionals.Count > 0 ? positionals[0] : "tail";
+        return await eventsCmd.ExecuteAsync(cwd, sub, followLogs, cancellation.Token);
+    }
+
+    if (command == "checkpoint")
+    {
+        var sub = positionals.Count > 0 ? positionals[0] : "list";
+        return checkpointCmd.Execute(cwd, sub, positionals.Skip(1).ToList(), force, outputJson);
+    }
+
+    if (command == "context")
+    {
+        var sub = positionals.Count > 0 ? positionals[0] : "show";
+        return contextCmd.Execute(cwd, sub);
+    }
+
+    if (command == "adapters")
+    {
+        var sub = positionals.Count > 0 ? positionals[0] : "list";
+        return adaptersCmd.Execute(cwd, sub, positionals.Skip(1).ToList(), force);
+    }
+
+    if (command == "recipes")
+    {
+        var sub = positionals.Count > 0 ? positionals[0] : "list";
+        return recipesCmd.Execute(cwd, sub, positionals.Skip(1).ToList(), force);
     }
 
     if (command == "config")
@@ -741,8 +823,8 @@ try
             // startup code does NOT write to the console before Terminal.Gui takes
             // over. Then run Terminal.Gui blocking on the MAIN THREAD.
             var cmdTask = command == "run"
-                ? Task.Run(() => runCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, maxRetries, retryDelaySeconds, maxIterations: maxIterations, dryRun: dryRun, verbose: verbose, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, mode: runMode, force: runPersistent, noCommit: noCommit, fast: fast, cancellationToken: cancellation.Token))
-                : Task.Run(() => onceCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, dryRun: dryRun, verbose: verbose, taskOverride: inlineTask, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, noCommit: noCommit, fast: fast, cancellationToken: cancellation.Token));
+                ? Task.Run(() => runCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, maxRetries, retryDelaySeconds, maxIterations: maxIterations, dryRun: dryRun, verbose: verbose, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, mode: runMode, force: runPersistent, noCommit: noCommit, fast: fast, cliGates: cliGates, securityModeOverride: securityModeOverride, sandboxOverride: sandboxOverride, cancellationToken: cancellation.Token))
+                : Task.Run(() => onceCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, dryRun: dryRun, verbose: verbose, taskOverride: inlineTask, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, noCommit: noCommit, fast: fast, cliGates: cliGates, securityModeOverride: securityModeOverride, sandboxOverride: sandboxOverride, cancellationToken: cancellation.Token));
 
             tuiDashboard.MonitoredTask = cmdTask;
             try
@@ -760,12 +842,12 @@ try
 
         // Non-TUI path: direct async execution.
         if (command == "run")
-            return await runCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, maxRetries, retryDelaySeconds, maxIterations: maxIterations, dryRun: dryRun, verbose: verbose, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, mode: runMode, force: runPersistent, noCommit: noCommit, fast: fast, cancellationToken: cancellation.Token);
+            return await runCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, maxRetries, retryDelaySeconds, maxIterations: maxIterations, dryRun: dryRun, verbose: verbose, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, mode: runMode, force: runPersistent, noCommit: noCommit, fast: fast, cliGates: cliGates, securityModeOverride: securityModeOverride, sandboxOverride: sandboxOverride, cancellationToken: cancellation.Token);
 
         if (inlineTask != null)
-            return await onceCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, dryRun: dryRun, verbose: verbose, taskOverride: inlineTask, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, noCommit: noCommit, fast: fast, cancellationToken: cancellation.Token);
+            return await onceCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, dryRun: dryRun, verbose: verbose, taskOverride: inlineTask, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, noCommit: noCommit, fast: fast, cliGates: cliGates, securityModeOverride: securityModeOverride, sandboxOverride: sandboxOverride, cancellationToken: cancellation.Token);
 
-        return await onceCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, dryRun: dryRun, verbose: verbose, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, noCommit: noCommit, fast: fast, cancellationToken: cancellation.Token);
+        return await onceCmd.ExecuteAsync(cwd, prdPath, skipTests, skipLint, engine, model, maxTokens, temperature, passthroughArgs, dryRun: dryRun, verbose: verbose, branchPerTask: branchPerTask, baseBranch: baseBranch, createPr: createPr, draftPr: draftPr, autoRollback: autoRollback, debugEngineJson: debugEngineJson, ignoreContextStops: ignoreContextStops, noChangePolicyOverride: noChangePolicyOverride, noChangeMaxAttemptsOverride: noChangeMaxAttemptsOverride, noChangeStopOnMaxAttemptsOverride: noChangeStopOnMaxAttemptsOverride, noCommit: noCommit, fast: fast, cliGates: cliGates, securityModeOverride: securityModeOverride, sandboxOverride: sandboxOverride, cancellationToken: cancellation.Token);
     }
 }
 catch (OperationCanceledException)
@@ -1035,3 +1117,42 @@ static void MarkCurrentTaskSkippedForReview(
 
 static string SanitizeLogValue(string value) =>
     value.Replace('\r', ' ').Replace('\n', ' ').Trim();
+
+static PrdGate ParseGateSpec(string raw)
+{
+    var value = raw.Trim();
+    var name = "gate";
+    var command = value;
+    var equals = value.IndexOf('=');
+    if (equals > 0)
+    {
+        name = value[..equals].Trim();
+        command = value[(equals + 1)..].Trim();
+    }
+
+    return new PrdGate
+    {
+        Name = string.IsNullOrWhiteSpace(name) ? "gate" : name,
+        Command = command,
+        Required = true,
+        Policy = "block"
+    };
+}
+
+static EngineSandboxOptions? BuildSandboxOverride(
+    bool? enabled,
+    string? provider,
+    string? image,
+    string? network)
+{
+    if (!enabled.HasValue && string.IsNullOrWhiteSpace(provider) && string.IsNullOrWhiteSpace(image) && string.IsNullOrWhiteSpace(network))
+        return null;
+
+    return new EngineSandboxOptions
+    {
+        Enabled = enabled ?? true,
+        Provider = string.IsNullOrWhiteSpace(provider) ? (string.IsNullOrWhiteSpace(image) ? "process" : "docker") : provider!,
+        Image = image,
+        Network = network
+    };
+}

@@ -22,6 +22,12 @@ public sealed class RalphConfig
     [JsonPropertyName("run")]
     public RunConfigEntry? Run { get; set; }
 
+    [JsonPropertyName("sandbox")]
+    public SandboxConfigEntry? Sandbox { get; set; }
+
+    [JsonPropertyName("security")]
+    public SecurityConfigEntry? Security { get; set; }
+
     public static RalphConfig Default => new()
     {
         Engines = new Dictionary<string, EngineConfigEntry>(StringComparer.OrdinalIgnoreCase)
@@ -43,12 +49,16 @@ public sealed class RalphConfig
             OnSignal = "warn"
         },
         Browser = new BrowserConfigEntry { Enabled = false, Command = null },
+        Sandbox = new SandboxConfigEntry { Enabled = false, Provider = "process", Image = null },
+        Security = new SecurityConfigEntry { Mode = "safe" },
         Run = new RunConfigEntry
         {
             NoChangePolicy = "fallback",
             NoChangeMaxAttempts = 3,
             NoChangeStopOnMaxAttempts = true,
-            IncludeProgressContext = false
+            IncludeProgressContext = false,
+            IncludeRepoMapContext = false,
+            AutoCheckpoints = false
         }
     };
 
@@ -96,6 +106,12 @@ public sealed class RunConfigEntry
 
     [JsonPropertyName("include_progress_context")]
     public bool? IncludeProgressContext { get; set; }
+
+    [JsonPropertyName("include_repo_map_context")]
+    public bool? IncludeRepoMapContext { get; set; }
+
+    [JsonPropertyName("auto_checkpoints")]
+    public bool? AutoCheckpoints { get; set; }
 }
 
 public sealed class EngineConfigEntry
@@ -111,4 +127,28 @@ public sealed class EngineConfigEntry
 
     [JsonPropertyName("temperature")]
     public double? Temperature { get; set; }
+
+    [JsonPropertyName("adapter")]
+    public string? Adapter { get; set; }
+}
+
+public sealed class SandboxConfigEntry
+{
+    [JsonPropertyName("enabled")]
+    public bool? Enabled { get; set; }
+
+    [JsonPropertyName("provider")]
+    public string? Provider { get; set; }
+
+    [JsonPropertyName("image")]
+    public string? Image { get; set; }
+
+    [JsonPropertyName("network")]
+    public string? Network { get; set; }
+}
+
+public sealed class SecurityConfigEntry
+{
+    [JsonPropertyName("mode")]
+    public string? Mode { get; set; }
 }

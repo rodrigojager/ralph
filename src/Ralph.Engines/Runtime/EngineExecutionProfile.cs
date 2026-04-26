@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Ralph.Engines.Abstractions;
 
 namespace Ralph.Engines.Runtime;
 
@@ -31,6 +32,28 @@ internal sealed record EngineExecutionProfile(
             "gemini" => new EngineExecutionProfile(normalized, PromptTransportMode.Argument, EngineOutputMode.StreamJson, true, "-p"),
             _ => new EngineExecutionProfile(normalized, PromptTransportMode.Argument, EngineOutputMode.PlainText, true)
         };
+    }
+
+    public static EngineExecutionProfile FromAdapter(string engineName, EngineAdapterOptions? adapter)
+    {
+        if (adapter == null)
+            return For(engineName);
+
+        var transport = string.Equals(adapter.PromptTransport, "stdin", StringComparison.OrdinalIgnoreCase)
+            ? PromptTransportMode.Stdin
+            : PromptTransportMode.Argument;
+        var output = string.Equals(adapter.OutputMode, "stream-json", StringComparison.OrdinalIgnoreCase)
+                     || string.Equals(adapter.OutputMode, "stream_json", StringComparison.OrdinalIgnoreCase)
+                     || string.Equals(adapter.OutputMode, "jsonl", StringComparison.OrdinalIgnoreCase)
+            ? EngineOutputMode.StreamJson
+            : EngineOutputMode.PlainText;
+
+        return new EngineExecutionProfile(
+            (adapter.Name ?? engineName).Trim().ToLowerInvariant(),
+            transport,
+            output,
+            true,
+            adapter.PromptFlag);
     }
 }
 

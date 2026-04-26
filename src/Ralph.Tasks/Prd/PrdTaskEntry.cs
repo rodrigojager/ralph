@@ -16,4 +16,13 @@ public sealed class PrdTaskEntry
     };
     public string RawLine { get; init; } = string.Empty;
     public string DisplayText { get; init; } = string.Empty;
+    public string? Id { get; init; }
+    public string Group { get; init; } = "default";
+    public IReadOnlyList<string> DependsOn { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> AcceptanceCriteria { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> FilesAllowed { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<PrdGate> Gates { get; init; } = Array.Empty<PrdGate>();
+    public int? Complexity { get; init; }
+    public string? Priority { get; init; }
+    public string? Notes { get; init; }
 }

@@ -13,4 +13,7 @@ public sealed class EngineRequest
     public string? ModelOverride { get; init; }
     public IReadOnlyList<string>? ExtraArgsPassthrough { get; init; }
     public bool Fast { get; init; }
+    public string? SecurityMode { get; init; }
+    public EngineAdapterOptions? Adapter { get; init; }
+    public EngineSandboxOptions? Sandbox { get; init; }
 }

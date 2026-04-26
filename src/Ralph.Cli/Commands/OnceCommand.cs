@@ -1,4 +1,6 @@
 using Ralph.Core.RunLoop;
+using Ralph.Engines.Abstractions;
+using Ralph.Tasks.Prd;
 
 namespace Ralph.Cli.Commands;
 
@@ -36,6 +38,9 @@ public sealed class OnceCommand
         bool? noChangeStopOnMaxAttemptsOverride = null,
         bool noCommit = false,
         bool fast = false,
+        IReadOnlyList<PrdGate>? cliGates = null,
+        string? securityModeOverride = null,
+        EngineSandboxOptions? sandboxOverride = null,
         CancellationToken cancellationToken = default)
     {
         if (dryRun)
@@ -73,7 +78,9 @@ public sealed class OnceCommand
                 cancellationToken,
                 verbose,
                 debugEngineJson,
-                fast);
+                fast,
+                securityModeOverride,
+                sandboxOverride);
             return brownfieldResult.Completed ? 0 : 1;
         }
 
@@ -100,7 +107,11 @@ public sealed class OnceCommand
             noChangeMaxAttemptsOverride,
             noChangeStopOnMaxAttemptsOverride,
             noCommit,
-            fast);
+            fast,
+            PromptContextMode.LoopTaskScoped,
+            cliGates,
+            securityModeOverride,
+            sandboxOverride);
         return result.Completed ? 0 : (result.Gutter ? 2 : 1);
     }
 }

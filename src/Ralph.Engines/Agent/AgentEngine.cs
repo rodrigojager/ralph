@@ -36,13 +36,15 @@ public sealed class AgentEngine : IEngine
         var detectedErrors = new List<DetectedErrorKind>();
         var hadStructuredError = false;
 
-        var argsForLog = BuildArgs(request);
+        var profile = ResolveProfile(request);
+        var argsForLog = BuildArgsCore(request, profile);
 
         try
         {
             var command = ResolveCommand(request.CommandOverride ?? _commandName);
             var launch = _platformStrategy.BuildLaunch(command, request.CommandPrefixArgs, argsForLog);
-            var promptTransport = _platformStrategy.ResolvePromptTransport(_profile);
+            launch = ApplySandboxIfRequested(request, launch);
+            var promptTransport = _platformStrategy.ResolvePromptTransport(profile);
             var redirectStdin = promptTransport == PromptTransportMode.Stdin;
 
             var lastHeartbeatUtc = DateTime.UtcNow;
@@ -168,7 +170,7 @@ public sealed class AgentEngine : IEngine
             var outText = stdout.ToString();
             var errText = stderr.ToString();
 
-            if (_profile.OutputMode == EngineOutputMode.StreamJson)
+            if (profile.OutputMode == EngineOutputMode.StreamJson)
             {
                 var parsed = StreamJsonOutputParser.Parse(outText);
                 hadStructuredError = parsed.HasStructuredError;
@@ -222,8 +224,34 @@ public sealed class AgentEngine : IEngine
 
     private List<string> BuildArgs(EngineRequest request)
     {
+        return BuildArgsCore(request, ResolveProfile(request));
+    }
+
+    private List<string> BuildArgsCore(EngineRequest request, EngineExecutionProfile profile)
+    {
         var args = new List<string>();
         var passthrough = request.ExtraArgsPassthrough;
+
+        if (request.Adapter != null)
+        {
+            args.AddRange(request.Adapter.DefaultArgs);
+            args.AddRange(ResolveAdapterSafetyArgs(request.Adapter, request.SecurityMode));
+            if (!string.IsNullOrEmpty(request.ModelOverride))
+            {
+                args.Add(request.Adapter.ModelFlag ?? "--model");
+                args.Add(request.ModelOverride);
+            }
+            if (passthrough != null)
+                args.AddRange(passthrough);
+            var useStdinForAdapter = _platformStrategy.ResolvePromptTransport(profile) == PromptTransportMode.Stdin;
+            if (!useStdinForAdapter && !string.IsNullOrWhiteSpace(request.TaskText))
+            {
+                if (!string.IsNullOrWhiteSpace(profile.PromptFlag))
+                    args.Add(profile.PromptFlag!);
+                args.Add(request.TaskText!);
+            }
+            return args;
+        }
 
         if (Name.Equals("codex", StringComparison.OrdinalIgnoreCase))
         {
@@ -231,7 +259,7 @@ public sealed class AgentEngine : IEngine
             args.Add("--skip-git-repo-check");
             if (!HasSandboxOrAutoFlag(passthrough))
             {
-                if (UseDangerousCodexMode())
+                if (IsDangerousMode(request.SecurityMode))
                     args.Add("--dangerously-bypass-approvals-and-sandbox");
                 else
                     args.Add("--full-auto");
@@ -254,7 +282,7 @@ public sealed class AgentEngine : IEngine
         else if (Name.Equals("claude", StringComparison.OrdinalIgnoreCase))
         {
             args.Add("-p");
-            if (!HasClaudePermissionFlag(passthrough))
+            if (IsDangerousMode(request.SecurityMode) && !HasClaudePermissionFlag(passthrough))
             {
                 args.Add("--permission-mode");
                 args.Add("bypassPermissions");
@@ -264,8 +292,9 @@ public sealed class AgentEngine : IEngine
         {
             args.Add("--output-format");
             args.Add("stream-json");
-            args.Add("--yolo");
-            if (_platformStrategy.ResolvePromptTransport(_profile) == PromptTransportMode.Argument)
+            if (!IsSafeMode(request.SecurityMode))
+                args.Add("--yolo");
+            if (_platformStrategy.ResolvePromptTransport(profile) == PromptTransportMode.Argument)
                 args.Add("-p");
         }
         else if (Name.Equals("cursor", StringComparison.OrdinalIgnoreCase))
@@ -273,7 +302,7 @@ public sealed class AgentEngine : IEngine
             args.Add("--force");
             args.Add("--output-format");
             args.Add("stream-json");
-            if (_platformStrategy.ResolvePromptTransport(_profile) == PromptTransportMode.Argument)
+            if (_platformStrategy.ResolvePromptTransport(profile) == PromptTransportMode.Argument)
                 args.Add("-p");
         }
 
@@ -286,11 +315,60 @@ public sealed class AgentEngine : IEngine
         if (passthrough != null)
             args.AddRange(passthrough);
 
-        var useStdin = _platformStrategy.ResolvePromptTransport(_profile) == PromptTransportMode.Stdin;
+        var useStdin = _platformStrategy.ResolvePromptTransport(profile) == PromptTransportMode.Stdin;
         if (!useStdin && !string.IsNullOrWhiteSpace(request.TaskText) && !Name.Equals("codex", StringComparison.OrdinalIgnoreCase))
             args.Add(request.TaskText!);
 
         return args;
+    }
+
+    private EngineExecutionProfile ResolveProfile(EngineRequest request)
+    {
+        return request.Adapter == null ? _profile : EngineExecutionProfile.FromAdapter(Name, request.Adapter);
+    }
+
+    private static IReadOnlyList<string> ResolveAdapterSafetyArgs(EngineAdapterOptions adapter, string? securityMode)
+    {
+        if (IsDangerousMode(securityMode))
+            return adapter.DangerousArgs;
+        if (string.Equals(securityMode, "auto", StringComparison.OrdinalIgnoreCase))
+            return adapter.AutoArgs.Count > 0 ? adapter.AutoArgs : adapter.SafeArgs;
+        return adapter.SafeArgs;
+    }
+
+    private static (string FileName, IReadOnlyList<string> Args) ApplySandboxIfRequested(
+        EngineRequest request,
+        (string FileName, IReadOnlyList<string> Args) launch)
+    {
+        var sandbox = request.Sandbox;
+        if (sandbox?.Enabled != true)
+            return launch;
+
+        var provider = (sandbox.Provider ?? "process").Trim().ToLowerInvariant();
+        if (provider is not ("docker" or "podman"))
+            return launch;
+        if (string.IsNullOrWhiteSpace(sandbox.Image))
+            return launch;
+
+        var args = new List<string>
+        {
+            "run",
+            "--rm",
+            "-i",
+            "-v",
+            $"{Path.GetFullPath(request.WorkingDirectory)}:/workspace",
+            "-w",
+            "/workspace"
+        };
+        if (!string.IsNullOrWhiteSpace(sandbox.Network))
+        {
+            args.Add("--network");
+            args.Add(sandbox.Network!);
+        }
+        args.Add(sandbox.Image!);
+        args.Add(launch.FileName);
+        args.AddRange(launch.Args);
+        return (provider, args);
     }
 
     private static bool HasSandboxOrAutoFlag(IReadOnlyList<string>? passthrough)
@@ -372,12 +450,22 @@ public sealed class AgentEngine : IEngine
         return TimeSpan.FromSeconds(defaultSeconds);
     }
 
-    private static bool UseDangerousCodexMode()
+    private static bool IsSafeMode(string? securityMode)
     {
+        return string.IsNullOrWhiteSpace(securityMode)
+               || securityMode.Equals("safe", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsDangerousMode(string? securityMode)
+    {
+        if (string.Equals(securityMode, "dangerous", StringComparison.OrdinalIgnoreCase))
+            return true;
         var safeMode = Environment.GetEnvironmentVariable("RALPH_CODEX_SAFE_MODE");
         if (string.Equals(safeMode, "1", StringComparison.OrdinalIgnoreCase)
             || string.Equals(safeMode, "true", StringComparison.OrdinalIgnoreCase))
             return false;
-        return true;
+        var dangerous = Environment.GetEnvironmentVariable("RALPH_DANGEROUS_MODE");
+        return string.Equals(dangerous, "1", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(dangerous, "true", StringComparison.OrdinalIgnoreCase);
     }
 }

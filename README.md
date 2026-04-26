@@ -176,6 +176,10 @@ Ele transforma o `PRD.md` em uma espécie de **fila determinística de trabalho 
 - Suporta execução única (`once`) e execução paralela (`parallel`).
 - Integra com múltiplas engines (`cursor`, `claude`, `codex`, `gemini`, etc).
 - Pode criar branch/PR por tarefa.
+- Emite eventos estruturados em `.ralph/events.jsonl` para dashboards/kanbans.
+- Suporta PRD v2 opcional: ids, grupos, dependências, acceptance criteria, gates e repo map.
+- Suporta adapters plugáveis em `.ralph/adapters/*.json`, sem acoplar o loop a uma engine específica.
+- Possui checkpoints, context pack/repo map, receitas e perfis de segurança/sandbox.
 - Tem auto-update (`ralph update`) e sincronização automática de idiomas.
 - Oferece múltiplas UIs: `none`, `spectre`, `gum`, `spectre+gum`, `tui`.
 
@@ -282,6 +286,118 @@ Arquivos relevantes:
 - `.ralph/reports/latest.md`
 
 Por padrao, `ralph run` supervisiona um worker interno e continua tentando ate o PRD avancar. Se o worker cair sem progresso, o supervisor relanca a execucao e, apos quedas repetidas na mesma tarefa, marca essa tarefa como `[~]` para revisao manual e segue para a proxima. Use `--fail-fast` apenas quando quiser desabilitar esse comportamento resiliente.
+
+## PRD simples e PRD v2 opcional
+
+O formato mínimo continua sendo apenas uma lista de checkboxes:
+
+```markdown
+- [ ] Criar endpoint /health
+- [ ] Adicionar teste de smoke
+```
+
+Campos v2 são opcionais. Eles existem para PRDs gerados por IA ou fluxos mais estruturados, mas não são necessários para uso manual:
+
+```markdown
+---
+engine: codex
+include_repo_map: true
+security: safe
+gates: test=dotnet test
+---
+
+- [ ] Criar endpoint /health [id: api-health] [group: backend]
+  acceptance_criteria: retorna 200, não exige autenticação
+  files_allowed: src/Api/Health.cs, tests/HealthTests.cs
+  gates: smoke=dotnet test --filter Health
+```
+
+Gates também são opcionais. Por padrão o Ralph não executa lint/test/build automaticamente; ele só executa `test_command`, `lint_command`, `browser_command`, `gates` do PRD/frontmatter ou gates passados na CLI:
+
+```bash
+ralph run --gate "test=dotnet test"
+ralph run --test-command "npm test"
+ralph run --lint-command "npm run lint"
+```
+
+`--skip-tests` e `--skip-lint` afetam apenas os comandos legados `test_command`/`lint_command` do PRD. `--fast` controla apenas o fast mode da engine quando suportado.
+
+## Observabilidade
+
+Além de `.ralph/execution.log`, cada execução grava eventos JSONL em `.ralph/events.jsonl`. Isso permite que um kanban, extensão de IDE ou app desktop monitore o Ralph sem depender de parsing de texto humano.
+
+Comandos úteis:
+
+```bash
+ralph status
+ralph status --json
+ralph events --follow
+ralph report last
+```
+
+## Adapters plugáveis
+
+Adapters ficam em `.ralph/adapters/*.json` e descrevem como chamar uma engine CLI. Isso mantém o Ralph desacoplado de Codex, OpenCode, Cursor, Claude ou qualquer outro executor.
+
+Criar template:
+
+```bash
+ralph adapters new minha-engine
+```
+
+Exemplo de adapter:
+
+```json
+{
+  "schema_version": 1,
+  "name": "minha-engine",
+  "command": "minha-engine",
+  "prompt_transport": "argument",
+  "output_mode": "plain",
+  "model_flag": "--model",
+  "default_args": [],
+  "safe_args": [],
+  "auto_args": [],
+  "dangerous_args": []
+}
+```
+
+Depois:
+
+```bash
+ralph run --engine minha-engine
+```
+
+## Contexto, checkpoints e sandbox
+
+O repo map é opcional e pode ser gerado/consumido quando necessário:
+
+```bash
+ralph context refresh
+ralph config set run.include_repo_map_context true
+```
+
+Checkpoints são snapshots leves baseados em metadados, estado e patch Git:
+
+```bash
+ralph checkpoint create "antes da refatoração"
+ralph checkpoint list
+ralph checkpoint restore <id>
+```
+
+Perfis de segurança:
+
+```bash
+ralph run --security safe
+ralph run --security auto
+ralph run --security dangerous
+```
+
+O padrão é `safe`. Para sandbox via container:
+
+```bash
+ralph run --sandbox --sandbox-provider docker --sandbox-image minha-imagem:latest
+```
 
 ## Atualização e idiomas
 

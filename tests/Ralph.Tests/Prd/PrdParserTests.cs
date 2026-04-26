@@ -155,6 +155,48 @@ engine: codex
     }
 
     [Fact]
+    public void Prd_v2_metadata_is_optional_and_does_not_affect_simple_tasks()
+    {
+        var doc = PrdParser.ParseContent("- [ ] Simple hand-written task");
+
+        Assert.Single(doc.TaskEntries);
+        Assert.Null(doc.TaskEntries[0].Id);
+        Assert.Equal("default", doc.TaskEntries[0].Group);
+        Assert.Empty(doc.TaskEntries[0].Gates);
+        Assert.Equal("Simple hand-written task", doc.TaskEntries[0].DisplayText);
+    }
+
+    [Fact]
+    public void Parses_optional_v2_inline_and_block_metadata()
+    {
+        var content = @"---
+include_repo_map: true
+security: safe
+gates: test=dotnet test
+---
+- [ ] Build API [id: api-1] [group: backend] [depends: db-1] [gate: lint=dotnet format --verify-no-changes]
+  acceptance_criteria: returns 200, validates input
+  files_allowed: src/App.cs, tests/AppTests.cs
+  priority: high";
+
+        var doc = PrdParser.ParseContent(content);
+
+        Assert.True(doc.Frontmatter!.IncludeRepoMap);
+        Assert.Equal("safe", doc.Frontmatter.SecurityMode);
+        Assert.Single(doc.Frontmatter.Gates);
+        var task = doc.TaskEntries[0];
+        Assert.Equal("Build API", task.DisplayText);
+        Assert.Equal("api-1", task.Id);
+        Assert.Equal("backend", task.Group);
+        Assert.Equal(new[] { "db-1" }, task.DependsOn);
+        Assert.Contains("returns 200", task.AcceptanceCriteria);
+        Assert.Equal("high", task.Priority);
+        Assert.Single(task.Gates);
+        Assert.Equal("lint", task.Gates[0].Name);
+        Assert.Equal("dotnet format --verify-no-changes", task.Gates[0].Command);
+    }
+
+    [Fact]
     public void Preserves_indentation()
     {
         var content = @"  - [ ] Indented task";
@@ -284,6 +326,45 @@ tasks:
             var doc = PrdParser.Parse(path);
             Assert.True(doc.TaskEntries[0].IsSkippedForReview);
             Assert.Equal(1, doc.GetNextPendingTaskIndex());
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Parses_json_object_prd_with_optional_frontmatter_and_tasks()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "RalphTests_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var path = Path.Combine(dir, "tasks.json");
+            File.WriteAllText(path, """
+{
+  "engine": "codex",
+  "include_repo_map": true,
+  "tasks": [
+    {
+      "id": "ui-1",
+      "title": "Build UI",
+      "group": "frontend",
+      "depends_on": ["api-1"],
+      "gates": [{ "name": "smoke", "command": "npm test", "required": false, "policy": "warn" }]
+    }
+  ]
+}
+""");
+            var doc = PrdParser.Parse(path);
+
+            Assert.Equal("codex", doc.Frontmatter!.Engine);
+            Assert.True(doc.Frontmatter.IncludeRepoMap);
+            Assert.Single(doc.TaskEntries);
+            Assert.Equal("ui-1", doc.TaskEntries[0].Id);
+            Assert.Equal("frontend", doc.TaskEntries[0].Group);
+            Assert.Equal("api-1", doc.TaskEntries[0].DependsOn[0]);
+            Assert.False(doc.TaskEntries[0].Gates[0].Required);
         }
         finally
         {

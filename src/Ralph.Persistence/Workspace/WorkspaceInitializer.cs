@@ -10,12 +10,18 @@ public sealed class WorkspaceInitializer
     public const string ErrorsLogFileName = "errors.log";
     public const string ActivityLogFileName = "activity.log";
     public const string ExecutionLogFileName = "execution.log";
+    public const string EventsLogFileName = "events.jsonl";
     public const string TuiDebugLogFileName = "tui-debug.log";
     public const string StateFileName = "state.json";
     public const string HeartbeatFileName = "heartbeat.json";
     public const string IterationFileName = ".iteration";
     public const string ConfigFileName = "config.json";
     public const string ReportsDirName = "reports";
+    public const string ContextDirName = "context";
+    public const string CheckpointsDirName = "checkpoints";
+    public const string PluginsDirName = "plugins";
+    public const string RecipesDirName = "recipes";
+    public const string AdaptersDirName = "adapters";
     public const string RalphDirName = ".ralph";
     public const string PrdFileName = "PRD.md";
 
@@ -37,6 +43,9 @@ public sealed class WorkspaceInitializer
     public string GetExecutionLogPath(string workingDirectory) =>
         Path.Combine(GetRalphDir(workingDirectory), ExecutionLogFileName);
 
+    public string GetEventsLogPath(string workingDirectory) =>
+        Path.Combine(GetRalphDir(workingDirectory), EventsLogFileName);
+
     public string GetTuiDebugLogPath(string workingDirectory) =>
         Path.Combine(GetRalphDir(workingDirectory), TuiDebugLogFileName);
 
@@ -54,6 +63,24 @@ public sealed class WorkspaceInitializer
 
     public string GetReportsDir(string workingDirectory) =>
         Path.Combine(GetRalphDir(workingDirectory), ReportsDirName);
+
+    public string GetContextDir(string workingDirectory) =>
+        Path.Combine(GetRalphDir(workingDirectory), ContextDirName);
+
+    public string GetRepoMapPath(string workingDirectory) =>
+        Path.Combine(GetContextDir(workingDirectory), "repo-map.md");
+
+    public string GetCheckpointsDir(string workingDirectory) =>
+        Path.Combine(GetRalphDir(workingDirectory), CheckpointsDirName);
+
+    public string GetPluginsDir(string workingDirectory) =>
+        Path.Combine(GetRalphDir(workingDirectory), PluginsDirName);
+
+    public string GetRecipesDir(string workingDirectory) =>
+        Path.Combine(GetRalphDir(workingDirectory), RecipesDirName);
+
+    public string GetAdaptersDir(string workingDirectory) =>
+        Path.Combine(GetRalphDir(workingDirectory), AdaptersDirName);
 
     public string GetLatestReportMarkdownPath(string workingDirectory) =>
         Path.Combine(GetReportsDir(workingDirectory), "latest.md");
@@ -76,6 +103,7 @@ public sealed class WorkspaceInitializer
         WriteIfMissing(GetErrorsLogPath(workingDirectory), "");
         WriteIfMissing(GetActivityLogPath(workingDirectory), "");
         WriteIfMissing(GetExecutionLogPath(workingDirectory), "");
+        WriteIfMissing(GetEventsLogPath(workingDirectory), "");
         WriteIfMissing(GetTuiDebugLogPath(workingDirectory), "");
         WriteIfMissing(GetStatePath(workingDirectory), "{\"iteration\":0,\"retries\":0}\n");
         WriteIfMissing(GetHeartbeatPath(workingDirectory), "{}\n");
@@ -83,6 +111,11 @@ public sealed class WorkspaceInitializer
         WriteIfMissing(GetConfigPath(workingDirectory), GetDefaultConfigContent());
         WriteIfMissing(GetPrdPath(workingDirectory), GetDefaultPrdContent());
         Directory.CreateDirectory(GetReportsDir(workingDirectory));
+        Directory.CreateDirectory(GetContextDir(workingDirectory));
+        Directory.CreateDirectory(GetCheckpointsDir(workingDirectory));
+        Directory.CreateDirectory(GetPluginsDir(workingDirectory));
+        Directory.CreateDirectory(GetRecipesDir(workingDirectory));
+        Directory.CreateDirectory(GetAdaptersDir(workingDirectory));
 
         UpdateGitExclude(workingDirectory);
     }
@@ -94,6 +127,7 @@ public sealed class WorkspaceInitializer
         WriteIfMissing(GetErrorsLogPath(workingDirectory), "");
         WriteIfMissing(GetActivityLogPath(workingDirectory), "");
         WriteIfMissing(GetExecutionLogPath(workingDirectory), "");
+        WriteIfMissing(GetEventsLogPath(workingDirectory), "");
         WriteIfMissing(GetTuiDebugLogPath(workingDirectory), "");
         WriteIfMissing(GetStatePath(workingDirectory), "{\"iteration\":0,\"retries\":0}\n");
         WriteIfMissing(GetHeartbeatPath(workingDirectory), "{}\n");
@@ -101,6 +135,11 @@ public sealed class WorkspaceInitializer
         WriteIfMissing(GetConfigPath(workingDirectory), GetDefaultConfigContent());
         WriteIfMissing(GetPrdPath(workingDirectory), GetDefaultPrdContent());
         Directory.CreateDirectory(GetReportsDir(workingDirectory));
+        Directory.CreateDirectory(GetContextDir(workingDirectory));
+        Directory.CreateDirectory(GetCheckpointsDir(workingDirectory));
+        Directory.CreateDirectory(GetPluginsDir(workingDirectory));
+        Directory.CreateDirectory(GetRecipesDir(workingDirectory));
+        Directory.CreateDirectory(GetAdaptersDir(workingDirectory));
         UpdateGitExclude(workingDirectory);
     }
 

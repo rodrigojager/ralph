@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
+using Ralph.Core.Processes;
 
 namespace Ralph.Core.Git;
 
@@ -11,20 +12,20 @@ public sealed class GitService
 
     public string? GetCurrentBranch(string workingDirectory)
     {
-        var output = RunGit("rev-parse --abbrev-ref HEAD", workingDirectory);
+        var output = RunGit(new[] { "rev-parse", "--abbrev-ref", "HEAD" }, workingDirectory);
         var branch = output?.Trim();
         return string.IsNullOrEmpty(branch) ? null : branch;
     }
 
     public bool HasUncommittedChanges(string workingDirectory)
     {
-        var output = RunGit("status --porcelain", workingDirectory);
+        var output = RunGit(new[] { "status", "--porcelain" }, workingDirectory);
         return !string.IsNullOrWhiteSpace(output);
     }
 
     public IReadOnlyList<string> GetUntrackedFiles(string workingDirectory)
     {
-        var output = RunGit("ls-files --others --exclude-standard", workingDirectory);
+        var output = RunGit(new[] { "ls-files", "--others", "--exclude-standard" }, workingDirectory);
         if (string.IsNullOrWhiteSpace(output))
             return Array.Empty<string>();
         return output
@@ -34,44 +35,43 @@ public sealed class GitService
 
     public bool RestoreTrackedFiles(string workingDirectory)
     {
-        var output = RunGit("restore --worktree --staged .", workingDirectory, captureStderr: true);
+        var output = RunGit(new[] { "restore", "--worktree", "--staged", "." }, workingDirectory, captureStderr: true);
         return output != null;
     }
 
     public bool CheckoutBranch(string workingDirectory, string branchName)
     {
-        var output = RunGit($"checkout {branchName}", workingDirectory, captureStderr: true);
+        var output = RunGit(new[] { "checkout", branchName }, workingDirectory, captureStderr: true);
         return output != null;
     }
 
     public bool CreateAndCheckoutBranch(string workingDirectory, string branchName, string baseBranch)
     {
         // Ensure we're on the base branch first
-        RunGit($"checkout {baseBranch}", workingDirectory, captureStderr: true);
-        var output = RunGit($"checkout -b {branchName}", workingDirectory, captureStderr: true);
+        RunGit(new[] { "checkout", baseBranch }, workingDirectory, captureStderr: true);
+        var output = RunGit(new[] { "checkout", "-b", branchName }, workingDirectory, captureStderr: true);
         return output != null;
     }
 
     public bool CommitAll(string workingDirectory, string message)
     {
-        RunGit("add -A", workingDirectory, captureStderr: true);
-        var escaped = message.Replace("\"", "\\\"");
-        var output = RunGit($"commit -m \"{escaped}\"", workingDirectory, captureStderr: true);
+        RunGit(new[] { "add", "-A" }, workingDirectory, captureStderr: true);
+        var output = RunGit(new[] { "commit", "-m", message }, workingDirectory, captureStderr: true);
         return output != null;
     }
 
     public bool PushBranch(string workingDirectory, string branchName)
     {
-        var output = RunGit($"push -u origin {branchName}", workingDirectory, captureStderr: true);
+        var output = RunGit(new[] { "push", "-u", "origin", branchName }, workingDirectory, captureStderr: true);
         return output != null;
     }
 
     public bool CreatePullRequest(string workingDirectory, string title, string body, bool draft)
     {
-        var escapedTitle = title.Replace("\"", "\\\"");
-        var escapedBody = body.Replace("\"", "\\\"");
-        var draftFlag = draft ? " --draft" : "";
-        var output = RunGh($"pr create --title \"{escapedTitle}\" --body \"{escapedBody}\"{draftFlag}", workingDirectory);
+        var args = new List<string> { "pr", "create", "--title", title, "--body", body };
+        if (draft)
+            args.Add("--draft");
+        var output = RunGh(args, workingDirectory);
         return output != null;
     }
 
@@ -87,39 +87,24 @@ public sealed class GitService
         return $"ralph/{slug}";
     }
 
-    private static string? RunGit(string arguments, string workingDirectory, bool captureStderr = false)
+    private static string? RunGit(IReadOnlyList<string> arguments, string workingDirectory, bool captureStderr = false)
     {
         return RunCommand("git", arguments, workingDirectory, captureStderr);
     }
 
-    private static string? RunGh(string arguments, string workingDirectory)
+    private static string? RunGh(IReadOnlyList<string> arguments, string workingDirectory)
     {
         return RunCommand("gh", arguments, workingDirectory, captureStderr: true);
     }
 
-    private static string? RunCommand(string fileName, string arguments, string workingDirectory, bool captureStderr)
+    private static string? RunCommand(string fileName, IReadOnlyList<string> arguments, string workingDirectory, bool captureStderr)
     {
         try
         {
-            var stdout = new StringBuilder();
-            using var process = new Process
-            {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = fileName,
-                    Arguments = arguments,
-                    WorkingDirectory = workingDirectory,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = captureStderr,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                }
-            };
-            process.OutputDataReceived += (_, e) => { if (e.Data != null) stdout.AppendLine(e.Data); };
-            process.Start();
-            process.BeginOutputReadLine();
-            process.WaitForExit(30_000);
-            return process.ExitCode == 0 ? stdout.ToString() : null;
+            var result = ProcessRunner.Run(fileName, arguments, workingDirectory, TimeSpan.FromSeconds(30));
+            if (result.ExitCode != 0)
+                return null;
+            return result.Stdout;
         }
         catch
         {

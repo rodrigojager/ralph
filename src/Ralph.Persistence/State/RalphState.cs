@@ -16,6 +16,12 @@ public sealed class RalphState
     [JsonPropertyName("last_task_text")]
     public string? LastTaskText { get; set; }
 
+    [JsonPropertyName("current_run_id")]
+    public string? CurrentRunId { get; set; }
+
+    [JsonPropertyName("current_task_id")]
+    public string? CurrentTaskId { get; set; }
+
     [JsonPropertyName("current_task_index")]
     public int? CurrentTaskIndex { get; set; }
 

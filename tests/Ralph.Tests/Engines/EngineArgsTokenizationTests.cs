@@ -62,8 +62,25 @@ public class EngineArgsTokenizationTests
         });
 
         Assert.Contains("--json", args);
+        Assert.Contains("--full-auto", args);
+        Assert.DoesNotContain("--dangerously-bypass-approvals-and-sandbox", args);
         Assert.Contains("-c", args);
         Assert.Contains("model_reasoning_effort=\"high\"", args);
+    }
+
+    [Fact]
+    public void CodexEngine_BuildArgs_UsesDangerousModeOnlyWhenRequested()
+    {
+        var engine = new AgentEngine("codex", "codex");
+        var args = BuildArgs(engine, new EngineRequest
+        {
+            WorkingDirectory = ".",
+            TaskText = "hello world",
+            SecurityMode = "dangerous"
+        });
+
+        Assert.Contains("--dangerously-bypass-approvals-and-sandbox", args);
+        Assert.DoesNotContain("--full-auto", args);
     }
 
     [Fact]

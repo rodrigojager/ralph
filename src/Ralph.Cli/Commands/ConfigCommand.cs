@@ -48,6 +48,12 @@ public sealed class ConfigCommand
     {
         if (config.Parallel?.MaxParallel is { } mp)
             Console.WriteLine($"parallel: max_parallel={mp}");
+        if (config.Run != null)
+            Console.WriteLine($"run: include_progress_context={config.Run.IncludeProgressContext?.ToString().ToLowerInvariant() ?? "false"}, include_repo_map_context={config.Run.IncludeRepoMapContext?.ToString().ToLowerInvariant() ?? "false"}, auto_checkpoints={config.Run.AutoCheckpoints?.ToString().ToLowerInvariant() ?? "false"}");
+        if (config.Security != null)
+            Console.WriteLine($"security: mode={config.Security.Mode ?? "safe"}");
+        if (config.Sandbox != null)
+            Console.WriteLine($"sandbox: enabled={config.Sandbox.Enabled?.ToString().ToLowerInvariant() ?? "false"}, provider={config.Sandbox.Provider ?? "process"}, image={config.Sandbox.Image ?? "(none)"}");
 
         if (config.Engines == null || config.Engines.Count == 0)
         {
@@ -55,7 +61,7 @@ public sealed class ConfigCommand
             return;
         }
         foreach (var (name, ec) in config.Engines)
-            Console.WriteLine($"{name}: command={ec.Command ?? "?"}, model={ec.DefaultModel ?? "(default)"}, max_tokens={(ec.MaxTokens?.ToString() ?? "(default)")}, temperature={(ec.Temperature?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "(default)")}");
+            Console.WriteLine($"{name}: command={ec.Command ?? "?"}, adapter={ec.Adapter ?? "(default)"}, model={ec.DefaultModel ?? "(default)"}, max_tokens={(ec.MaxTokens?.ToString() ?? "(default)")}, temperature={(ec.Temperature?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "(default)")}");
     }
 
     private static void GetConfig(RalphConfig config, string key, IStringCatalog s)
@@ -110,6 +116,41 @@ public sealed class ConfigCommand
             Console.WriteLine(config.Run?.IncludeProgressContext?.ToString().ToLowerInvariant() ?? "");
             return;
         }
+        if (key.Equals("run.include_repo_map_context", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine(config.Run?.IncludeRepoMapContext?.ToString().ToLowerInvariant() ?? "");
+            return;
+        }
+        if (key.Equals("run.auto_checkpoints", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine(config.Run?.AutoCheckpoints?.ToString().ToLowerInvariant() ?? "");
+            return;
+        }
+        if (key.Equals("security.mode", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine(config.Security?.Mode ?? "");
+            return;
+        }
+        if (key.Equals("sandbox.enabled", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine(config.Sandbox?.Enabled?.ToString().ToLowerInvariant() ?? "");
+            return;
+        }
+        if (key.Equals("sandbox.provider", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine(config.Sandbox?.Provider ?? "");
+            return;
+        }
+        if (key.Equals("sandbox.image", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine(config.Sandbox?.Image ?? "");
+            return;
+        }
+        if (key.Equals("sandbox.network", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine(config.Sandbox?.Network ?? "");
+            return;
+        }
 
         var parts = key.Split('.', 2);
         if (parts.Length == 1)
@@ -130,6 +171,7 @@ public sealed class ConfigCommand
                 "default_model" => e.DefaultModel ?? "",
                 "max_tokens" => e.MaxTokens?.ToString() ?? "",
                 "temperature" => e.Temperature?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "",
+                "adapter" => e.Adapter ?? "",
                 _ => s.Get("config.unknown_key")
             });
         }
@@ -271,6 +313,83 @@ public sealed class ConfigCommand
             Console.WriteLine(s.Format("config.set_ok", key, value));
             return;
         }
+        if (key.Equals("run.include_repo_map_context", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!bool.TryParse(value, out var includeRepoMapContext))
+            {
+                Console.Error.WriteLine(s.Get("config.invalid_bool"));
+                return;
+            }
+            config.Run ??= new RunConfigEntry();
+            config.Run.IncludeRepoMapContext = includeRepoMapContext;
+            _configStore.Save(configPath, config);
+            Console.WriteLine(s.Format("config.set_ok", key, value));
+            return;
+        }
+        if (key.Equals("run.auto_checkpoints", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!bool.TryParse(value, out var autoCheckpoints))
+            {
+                Console.Error.WriteLine(s.Get("config.invalid_bool"));
+                return;
+            }
+            config.Run ??= new RunConfigEntry();
+            config.Run.AutoCheckpoints = autoCheckpoints;
+            _configStore.Save(configPath, config);
+            Console.WriteLine(s.Format("config.set_ok", key, value));
+            return;
+        }
+        if (key.Equals("security.mode", StringComparison.OrdinalIgnoreCase))
+        {
+            var normalized = value.Trim().ToLowerInvariant();
+            if (normalized is not ("safe" or "auto" or "dangerous"))
+            {
+                Console.Error.WriteLine("Invalid security mode. Use: safe, auto, dangerous");
+                return;
+            }
+            config.Security ??= new SecurityConfigEntry();
+            config.Security.Mode = normalized;
+            _configStore.Save(configPath, config);
+            Console.WriteLine(s.Format("config.set_ok", key, value));
+            return;
+        }
+        if (key.Equals("sandbox.enabled", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!bool.TryParse(value, out var sandboxEnabled))
+            {
+                Console.Error.WriteLine(s.Get("config.invalid_bool"));
+                return;
+            }
+            config.Sandbox ??= new SandboxConfigEntry();
+            config.Sandbox.Enabled = sandboxEnabled;
+            _configStore.Save(configPath, config);
+            Console.WriteLine(s.Format("config.set_ok", key, value));
+            return;
+        }
+        if (key.Equals("sandbox.provider", StringComparison.OrdinalIgnoreCase))
+        {
+            config.Sandbox ??= new SandboxConfigEntry();
+            config.Sandbox.Provider = value;
+            _configStore.Save(configPath, config);
+            Console.WriteLine(s.Format("config.set_ok", key, value));
+            return;
+        }
+        if (key.Equals("sandbox.image", StringComparison.OrdinalIgnoreCase))
+        {
+            config.Sandbox ??= new SandboxConfigEntry();
+            config.Sandbox.Image = IsResetValue(value) ? null : value;
+            _configStore.Save(configPath, config);
+            Console.WriteLine(s.Format("config.set_ok", key, value));
+            return;
+        }
+        if (key.Equals("sandbox.network", StringComparison.OrdinalIgnoreCase))
+        {
+            config.Sandbox ??= new SandboxConfigEntry();
+            config.Sandbox.Network = IsResetValue(value) ? null : value;
+            _configStore.Save(configPath, config);
+            Console.WriteLine(s.Format("config.set_ok", key, value));
+            return;
+        }
 
         config.Engines ??= new Dictionary<string, EngineConfigEntry>(StringComparer.OrdinalIgnoreCase);
         var parts = key.Split('.', 2);
@@ -305,6 +424,9 @@ public sealed class ConfigCommand
                     return;
                 }
                 ec.Temperature = temperature;
+                break;
+            case "adapter":
+                ec.Adapter = IsResetValue(value) ? null : value;
                 break;
             default: Console.Error.WriteLine(s.Format("config.unknown_key_named", prop)); return;
         }

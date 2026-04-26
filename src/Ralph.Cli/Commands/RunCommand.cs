@@ -1,5 +1,6 @@
 using Ralph.Core.RunLoop;
 using Ralph.Core.Localization;
+using Ralph.Engines.Abstractions;
 using Ralph.Tasks.Prd;
 
 namespace Ralph.Cli.Commands;
@@ -50,6 +51,9 @@ public sealed class RunCommand
         bool force = false,
         bool noCommit = false,
         bool fast = false,
+        IReadOnlyList<PrdGate>? cliGates = null,
+        string? securityModeOverride = null,
+        EngineSandboxOptions? sandboxOverride = null,
         CancellationToken cancellationToken = default)
     {
         if (dryRun)
@@ -85,6 +89,9 @@ public sealed class RunCommand
                 force,
                 noCommit,
                 fast,
+                cliGates,
+                securityModeOverride,
+                sandboxOverride,
                 cancellationToken);
 
         return await RunWiggumModeAsync(
@@ -112,6 +119,9 @@ public sealed class RunCommand
             noChangeStopOnMaxAttemptsOverride,
             noCommit,
             fast,
+            cliGates,
+            securityModeOverride,
+            sandboxOverride,
             cancellationToken);
     }
 
@@ -141,6 +151,9 @@ public sealed class RunCommand
         bool force,
         bool noCommit,
         bool fast,
+        IReadOnlyList<PrdGate>? cliGates,
+        string? securityModeOverride,
+        EngineSandboxOptions? sandboxOverride,
         CancellationToken cancellationToken)
     {
         var iterationsDone = 0;
@@ -177,7 +190,10 @@ public sealed class RunCommand
                 noChangeStopOnMaxAttemptsOverride,
                 noCommit,
                 fast,
-                PromptContextMode.LoopTaskScoped);
+                PromptContextMode.LoopTaskScoped,
+                cliGates,
+                securityModeOverride,
+                sandboxOverride);
 
             var after = ReadNextPending(prdPath);
             var progressed = HasProgress(before, after);
@@ -245,6 +261,9 @@ public sealed class RunCommand
         bool? noChangeStopOnMaxAttemptsOverride,
         bool noCommit,
         bool fast,
+        IReadOnlyList<PrdGate>? cliGates,
+        string? securityModeOverride,
+        EngineSandboxOptions? sandboxOverride,
         CancellationToken cancellationToken)
     {
         var completedInLoop = 0;
@@ -283,7 +302,10 @@ public sealed class RunCommand
                     noChangeStopOnMaxAttemptsOverride,
                     noCommit,
                     fast,
-                    PromptContextMode.WiggumFullPrd);
+                    PromptContextMode.WiggumFullPrd,
+                    cliGates,
+                    securityModeOverride,
+                    sandboxOverride);
 
                 var after = ReadNextPending(prdPath);
                 if (HasProgress(before, after))

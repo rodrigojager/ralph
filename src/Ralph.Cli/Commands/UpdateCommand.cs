@@ -77,9 +77,9 @@ public sealed class UpdateCommand
             var bytes = await http.GetByteArrayAsync(asset.DownloadUrl, ct);
             await File.WriteAllBytesAsync(tmpPath, bytes, ct);
 
+            await SyncLanguageFilesAsync(http, release, installDir, s, ct);
             Console.WriteLine(s.Get("update.applying"));
             ApplyBinaryUpdate(tmpPath, exePath);
-            await SyncLanguageFilesAsync(http, release, installDir, s, ct);
 
             Console.WriteLine(s.Format("update.ok", latest));
             return 0;
